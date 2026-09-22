@@ -855,6 +855,7 @@ func pushWatch(ctx context.Context, cfg config.Config, res watch.Result) error {
 		{Name: "wallapop_watch_scanned", Help: "Listings read in the last round", Value: float64(res.Scanned)},
 		{Name: "wallapop_watch_new", Help: "Listings announced in the last round", Value: float64(len(res.New))},
 		{Name: "wallapop_watch_duplicates", Help: "Listings dropped as a copy of one already seen", Value: float64(res.Duplicates)},
+		{Name: "wallapop_watch_cheaper", Help: "Listings announced for falling below their own lowest price", Value: float64(len(res.Cheaper))},
 	})
 }
 
