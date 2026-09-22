@@ -156,22 +156,52 @@ func (i SearchItem) Where() string {
 	return i.Location.Region
 }
 
-// Search runs a query against the public catalogue. It carries no session: the endpoint
-// answers the same to anybody, and an anonymous call cannot get the account flagged.
-func (c *Client) Search(ctx context.Context, query url.Values) ([]SearchItem, error) {
-	var answer struct {
-		Data struct {
-			Section struct {
-				Payload struct {
-					Items []SearchItem `json:"items"`
-				} `json:"payload"`
-			} `json:"section"`
-		} `json:"data"`
+// Search runs a query against the public catalogue, following the cursor for up to pages
+// pages. It carries no session: the endpoint answers the same to anybody, and an anonymous
+// call cannot get the account flagged.
+//
+// A page is 40 listings and a saved search can hold more, so a single page would leave the
+// tail of it unwatched: those listings would never be seen to change price.
+func (c *Client) Search(ctx context.Context, query url.Values, pages int) ([]SearchItem, error) {
+	if pages < 1 {
+		pages = 1
 	}
-	if err := c.public(ctx, PathSearch, query, &answer); err != nil {
-		return nil, err
+
+	var all []SearchItem
+	next := ""
+	for page := 0; page < pages; page++ {
+		asked := url.Values{}
+		for key, values := range query {
+			asked[key] = values
+		}
+		if next != "" {
+			asked.Set("next_page", next)
+		}
+
+		var answer struct {
+			Data struct {
+				Section struct {
+					Payload struct {
+						Items []SearchItem `json:"items"`
+					} `json:"payload"`
+				} `json:"section"`
+			} `json:"data"`
+			Meta struct {
+				NextPage string `json:"next_page"`
+			} `json:"meta"`
+		}
+		if err := c.public(ctx, PathSearch, asked, &answer); err != nil {
+			return all, err
+		}
+
+		items := answer.Data.Section.Payload.Items
+		all = append(all, items...)
+		next = answer.Meta.NextPage
+		if next == "" || len(items) == 0 {
+			break
+		}
 	}
-	return answer.Data.Section.Payload.Items, nil
+	return all, nil
 }
 
 // decodeSearches takes the bare array the endpoint answers today, and the {"data": [...]}

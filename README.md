@@ -95,6 +95,25 @@ are hashed, so a quiet round downloads nothing at all.
 What has been seen lives in `data/seen.json` and is forgotten after `WALLA_SEEN_TTL`.
 The first round of a new search announces nothing: its whole first page was already there.
 
+## When something gets cheaper
+
+A listing already seen is not news, but the same listing at a lower price is: that is what
+a watched search is for. Every round compares what a known listing costs now against the
+lowest it has ever been while watched, and a fall of `WALLA_WATCH_DROP` or more is
+announced with what it used to cost.
+
+Measuring against the lowest and not against yesterday is what keeps a seller who bounces
+between two numbers from being announced every week: the second time a price reaches a low
+it has already been at, it is not news any more.
+
+The duplicate rule carries over whole. A listing folded as a copy is recorded as a copy
+**of** the one that was announced, and a copy never speaks: when the dealer network
+reprices its eleven accounts, the message is the one listing that was announced, once.
+
+Searches are read `WALLA_SEARCH_PAGES` pages deep, because a page is 40 listings and a
+saved search can hold more. A listing past the last page read is not watched at all, so its
+price is never seen to move.
+
 ## The bot
 
 It announces without being asked, and answers four things when it is:
@@ -196,6 +215,8 @@ The watcher:
 | `WALLA_WATCH_MAX_AGE` | `24h` | A listing older than this is recorded without a message: it was already there |
 | `WALLA_WATCH_MAX_ALERTS` | `10` | Messages per round. The rest are counted in one line at the end |
 | `WALLA_WATCH_PHOTOS` | `2` | Thumbnails hashed per new listing |
+| `WALLA_WATCH_DROP` | `5` | Percent a listing has to shed, against its own lowest price, before the fall is announced. `0` says nothing about prices |
+| `WALLA_SEARCH_PAGES` | `3` | Pages of each search read per round. One page is 40 listings |
 | `WALLA_WATCH_MIN_PAUSE` / `WALLA_WATCH_MAX_PAUSE` | `3s` / `15s` | Random pause between searches within a round |
 | `WALLA_SEEN_TTL` | `720h` | How long a listing is remembered for the duplicate check |
 

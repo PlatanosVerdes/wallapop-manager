@@ -25,11 +25,16 @@ type Options struct {
 	MaxAge    time.Duration
 	MaxAlerts int
 	// PhotosPerItem is how many pictures of a new listing are hashed.
-	PhotosPerItem      int
+	PhotosPerItem int
+	// Pages of each search to read. One page is 40 listings.
+	Pages              int
 	SeenTTL            time.Duration
 	MinPause, MaxPause time.Duration
 	// Mutes are the searches silenced from the bot. Nil watches everything the app says.
-	Mutes  *Mutes
+	Mutes *Mutes
+	// Drop is how much of its own lowest price a listing has to shed before the fall is
+	// worth a message, as a fraction. Zero says nothing about prices at all.
+	Drop   float64
 	DryRun bool
 }
 
@@ -37,6 +42,8 @@ type Options struct {
 // message carries a button to silence it, and that needs its id.
 type Notifier interface {
 	Listing(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error
+	// Cheaper is the same listing as before at a lower price.
+	Cheaper(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error
 	Say(ctx context.Context, text string) error
 }
 
@@ -67,6 +74,7 @@ type Result struct {
 	// listings already too old to be news.
 	Seeded     int       `json:"seeded"`
 	Duplicates int       `json:"duplicates"`
+	Cheaper    []Hit     `json:"cheaper,omitempty"`
 	Held       int       `json:"held,omitempty"`
 	New        []Hit     `json:"new,omitempty"`
 	Failures   []Failure `json:"failures,omitempty"`
@@ -81,6 +89,9 @@ func (r Result) Summary() string {
 		return "wallapop: la ronda de busquedas ha fallado: " + r.Error
 	}
 	msg := fmt.Sprintf("wallapop: %d busquedas, %d anuncios mirados, %d nuevos", r.Watched, r.Scanned, len(r.New))
+	if len(r.Cheaper) > 0 {
+		msg += fmt.Sprintf(", %d mas baratos", len(r.Cheaper))
+	}
 	if r.Silenced > 0 {
 		msg += fmt.Sprintf(", %d silenciadas", r.Silenced)
 	}
@@ -135,7 +146,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 			}
 		}
 
-		items, err := client.Search(ctx, search.Values())
+		items, err := client.Search(ctx, search.Values(), opt.Pages)
 		if err != nil {
 			log.Error("search failed", "search", search.Name(), "err", err)
 			res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
@@ -149,7 +160,29 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 		firstPass := !seen.Watched(search.ID)
 
 		for _, item := range items {
+			// A listing already known is not news, but its price can be: the same thing
+			// cheaper than it has ever been is exactly what a watched search is for.
 			if seen.Known(item.ID) {
+				before, worth := seen.Cheaper(item, opt.Drop)
+				if opt.Drop <= 0 || !worth {
+					continue
+				}
+				if opt.MaxAlerts > 0 && len(res.New)+len(res.Cheaper) >= opt.MaxAlerts {
+					res.Held++
+					continue
+				}
+				res.Cheaper = append(res.Cheaper, Hit{
+					Search: search.Name(), Title: item.Title,
+					Price: item.Price.Amount, City: item.Where(), URL: item.URL(),
+				})
+				log.Info("cheaper", "title", item.Title, "before", before, "now", item.Price.Amount)
+				if notify == nil {
+					continue
+				}
+				if err := notify.Cheaper(ctx, search, item, before); err != nil {
+					log.Error("could not send the drop", "title", item.Title, "err", err)
+					res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
+				}
 				continue
 			}
 
@@ -157,7 +190,13 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 			if rec, reason, dup := seen.Duplicate(item, hashes); dup {
 				log.Info("duplicate", "title", item.Title, "of", rec.Title, "why", reason, "search", search.Name())
 				res.Duplicates++
-				seen.Add(item, hashes, search.Name(), now)
+				// Marked as a copy of the one that was announced, which is what keeps its
+				// price drops quiet too.
+				owner := rec.ID
+				if rec.CopyOf != "" {
+					owner = rec.CopyOf
+				}
+				seen.AddCopy(item, hashes, search.Name(), owner, now)
 				continue
 			}
 			seen.Add(item, hashes, search.Name(), now)
@@ -165,7 +204,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 			switch {
 			case firstPass, opt.MaxAge > 0 && now.Sub(item.Created()) > opt.MaxAge:
 				res.Seeded++
-			case opt.MaxAlerts > 0 && len(res.New) >= opt.MaxAlerts:
+			case opt.MaxAlerts > 0 && len(res.New)+len(res.Cheaper) >= opt.MaxAlerts:
 				res.Held++
 			default:
 				res.New = append(res.New, Hit{
@@ -272,6 +311,28 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	}
 	// The bot is shared with the other small services, so the message says who is talking.
 	// The listing's own address hangs from a button instead of sitting in the text.
+	if search != "" {
+		fmt.Fprintf(&b, "\n<i>🔎 wallapop · %s</i>", escape(search))
+	}
+	return b.String()
+}
+
+// CheaperLine is the message a price drop gets: the same card, with what it used to cost
+// and how much of it has gone.
+func CheaperLine(search string, item wallapop.SearchItem, before float64, escape func(string) string) string {
+	if escape == nil {
+		escape = func(s string) string { return s }
+	}
+	now := item.Price.Amount
+	var b strings.Builder
+	fmt.Fprintf(&b, "📉 <b>%s</b>\n", escape(item.Title))
+	fmt.Fprintf(&b, "<b>%s</b> · antes %s", Money(now, item.Price.Currency), Money(before, item.Price.Currency))
+	if before > 0 && now < before {
+		fmt.Fprintf(&b, " (−%.0f%%)", (before-now)/before*100)
+	}
+	if where := item.Where(); where != "" {
+		fmt.Fprintf(&b, "\n%s", escape(where))
+	}
 	if search != "" {
 		fmt.Fprintf(&b, "\n<i>🔎 wallapop · %s</i>", escape(search))
 	}

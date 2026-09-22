@@ -440,6 +440,9 @@ func htmlRound(res watch.Result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔎 <b>Ronda de las %s</b>\n", res.StartedAt.Format("15:04"))
 	fmt.Fprintf(&b, "%d anuncios · <b>%d nuevos</b> · %d repetidos\n", res.Scanned, len(res.New), res.Duplicates)
+	if len(res.Cheaper) > 0 {
+		fmt.Fprintf(&b, "<b>%d han bajado de precio</b>\n", len(res.Cheaper))
+	}
 
 	fmt.Fprintf(&b, "%d busquedas vigiladas", res.Watched)
 	if res.Silenced > 0 {
@@ -509,6 +512,8 @@ func runWatch(ctx context.Context, cfg config.Config, store *session.Store, log 
 	opt.SeenTTL = cfg.SeenTTL
 	opt.MinPause = cfg.WatchMinPause
 	opt.MaxPause = cfg.WatchMaxPause
+	opt.Drop = cfg.WatchDrop
+	opt.Pages = cfg.SearchPages
 
 	report := func(res watch.Result) watch.Result {
 		if opt.DryRun {
@@ -562,6 +567,11 @@ func (m *messenger) Listing(ctx context.Context, search wallapop.SavedSearch, it
 	return m.bot.Photo(ctx, item.Photo(), watch.Line(search.Name(), item, telegram.Escape), listingKeys(search, item))
 }
 
+func (m *messenger) Cheaper(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error {
+	return m.bot.Photo(ctx, item.Photo(), watch.CheaperLine(search.Name(), item, before, telegram.Escape),
+		listingKeys(search, item))
+}
+
 func (m *messenger) Say(ctx context.Context, text string) error {
 	return m.bot.Text(ctx, telegram.Escape(text), nil)
 }
@@ -583,6 +593,13 @@ func (printer) Listing(_ context.Context, search wallapop.SavedSearch, item wall
 	// On the phone these two hang from buttons; on a terminal they have to be printed.
 	fmt.Println("enlace:", item.URL())
 	fmt.Println("foto:  ", item.Photo())
+	return nil
+}
+
+func (printer) Cheaper(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error {
+	fmt.Println("---")
+	fmt.Println(watch.CheaperLine(search.Name(), item, before, telegram.Escape))
+	fmt.Println("enlace:", item.URL())
 	return nil
 }
 

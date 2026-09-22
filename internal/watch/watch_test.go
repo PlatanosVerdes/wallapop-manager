@@ -26,11 +26,17 @@ func (stubSession) Update(string, string, time.Time) error { return nil }
 
 type recorder struct {
 	listings []string
+	cheaper  []string
 	said     []string
 }
 
 func (r *recorder) Listing(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error {
 	r.listings = append(r.listings, search.Name()+"|"+item.Title)
+	return nil
+}
+
+func (r *recorder) Cheaper(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error {
+	r.cheaper = append(r.cheaper, fmt.Sprintf("%s|%s|%.0f→%.0f", search.Name(), item.Title, before, item.Price.Amount))
 	return nil
 }
 
@@ -44,6 +50,8 @@ type fakeWallapop struct {
 	searches []wallapop.SavedSearch
 	items    []wallapop.SearchItem
 	queries  []string
+	// secondPage, when set, is served behind a cursor the way a long search answers.
+	secondPage []wallapop.SearchItem
 	// url is where the fake listens, so photo links in the fixtures are absolute.
 	url string
 }
@@ -68,9 +76,20 @@ func (f *fakeWallapop) server(t *testing.T) *httptest.Server {
 				return
 			}
 			f.queries = append(f.queries, r.URL.RawQuery)
-			body := map[string]any{"data": map[string]any{"section": map[string]any{
-				"payload": map[string]any{"items": f.items},
-			}}}
+			items, next := f.items, ""
+			if f.secondPage != nil {
+				if r.URL.Query().Get("next_page") == "" {
+					next = "cursor"
+				} else {
+					items = f.secondPage
+				}
+			}
+			body := map[string]any{
+				"data": map[string]any{"section": map[string]any{
+					"payload": map[string]any{"items": items},
+				}},
+				"meta": map[string]any{"next_page": next},
+			}
 			_ = json.NewEncoder(w).Encode(body)
 		case strings.HasSuffix(r.URL.Path, ".jpg"):
 			// One picture per name, so two listings pointing at the same file are the
@@ -108,7 +127,7 @@ func newWatcher(t *testing.T, fake *fakeWallapop) (*wallapop.Client, Options) {
 	srv := fake.server(t)
 	client := wallapop.New(stubSession{})
 	client.BaseURL = srv.URL
-	return client, Options{MaxAge: 24 * time.Hour, MaxAlerts: 10, PhotosPerItem: 1, SeenTTL: time.Hour}
+	return client, Options{MaxAge: 24 * time.Hour, MaxAlerts: 10, PhotosPerItem: 1, SeenTTL: time.Hour, Pages: 3}
 }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -260,5 +279,116 @@ func TestSilencedSearchIsSkipped(t *testing.T) {
 	}
 	if len(fake.queries) != 1 {
 		t.Fatalf("%d searches were run, expected only the one that is not silenced", len(fake.queries))
+	}
+}
+
+// A listing already seen is not news, but the same thing cheaper than it has ever been is.
+func TestPriceDropIsAnnouncedOnce(t *testing.T) {
+	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	client, opt := newWatcher(t, fake)
+	opt.Drop = 0.05
+	bike := newItem("m1", "Yamaha XSR900", 9000, time.Minute, fake.photo("m1"))
+	fake.items = []wallapop.SearchItem{bike}
+
+	seen, _ := LoadSeen(t.TempDir())
+	notify := &recorder{}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+
+	// Down 8%: worth saying.
+	bike.Price.Amount = 8300
+	fake.items = []wallapop.SearchItem{bike}
+	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	if len(notify.cheaper) != 1 || !strings.Contains(notify.cheaper[0], "9000→8300") {
+		t.Fatalf("the drop was announced as %v", notify.cheaper)
+	}
+	if len(res.Cheaper) != 1 {
+		t.Fatalf("res.Cheaper = %d", len(res.Cheaper))
+	}
+
+	// The same price again is the same news, and news is told once.
+	Run(context.Background(), client, seen, notify, opt, quiet())
+	if len(notify.cheaper) != 1 {
+		t.Fatalf("the same drop was announced twice: %v", notify.cheaper)
+	}
+
+	// Back up and down again to where it already was: still the same news.
+	bike.Price.Amount = 9000
+	fake.items = []wallapop.SearchItem{bike}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+	bike.Price.Amount = 8300
+	fake.items = []wallapop.SearchItem{bike}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+	if len(notify.cheaper) != 1 {
+		t.Fatalf("a price bouncing back to a known low was announced again: %v", notify.cheaper)
+	}
+}
+
+func TestSmallDropIsNotWorthAMessage(t *testing.T) {
+	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	client, opt := newWatcher(t, fake)
+	opt.Drop = 0.05
+	bike := newItem("m1", "Yamaha XSR900", 9000, time.Minute, fake.photo("m1"))
+	fake.items = []wallapop.SearchItem{bike}
+
+	seen, _ := LoadSeen(t.TempDir())
+	notify := &recorder{}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+
+	bike.Price.Amount = 8800 // 2.2%
+	fake.items = []wallapop.SearchItem{bike}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+	if len(notify.cheaper) != 0 {
+		t.Fatalf("a 2%% haircut was announced: %v", notify.cheaper)
+	}
+}
+
+// Eleven accounts repricing one van is one piece of news, and it belongs to the listing
+// that was announced.
+func TestACopyDropsInSilence(t *testing.T) {
+	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	client, opt := newWatcher(t, fake)
+	opt.Drop = 0.05
+
+	first := newItem("m1", "YAMAHA XSR 900 (A2)", 8780, time.Minute, fake.photo("same"))
+	copyOf := newItem("m2", "Yamaha XSR900 A2 impecable", 8800, time.Minute, fake.photo("same"))
+	fake.items = []wallapop.SearchItem{first, copyOf}
+
+	seen, _ := LoadSeen(t.TempDir())
+	notify := &recorder{}
+	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	if res.Duplicates != 1 {
+		t.Fatalf("the copy was not folded: %+v", res)
+	}
+
+	// Both drop, as a dealer network does.
+	first.Price.Amount = 7900
+	copyOf.Price.Amount = 7900
+	fake.items = []wallapop.SearchItem{first, copyOf}
+	Run(context.Background(), client, seen, notify, opt, quiet())
+
+	if len(notify.cheaper) != 1 {
+		t.Fatalf("expected one message for the drop, got %v", notify.cheaper)
+	}
+	if !strings.Contains(notify.cheaper[0], "YAMAHA XSR 900 (A2)") {
+		t.Fatalf("the copy spoke instead of the listing that was announced: %v", notify.cheaper)
+	}
+}
+
+// A page is 40 listings and a saved search can hold more: the tail has to be read too, or
+// the listings in it are never seen to change price.
+func TestSearchFollowsTheCursor(t *testing.T) {
+	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	client, opt := newWatcher(t, fake)
+	fake.items = []wallapop.SearchItem{newItem("a", "Primera pagina", 100, time.Minute, fake.photo("a"))}
+	fake.secondPage = []wallapop.SearchItem{newItem("b", "Segunda pagina", 200, time.Minute, fake.photo("b"))}
+
+	seen, _ := LoadSeen(t.TempDir())
+	res := Run(context.Background(), client, seen, &recorder{}, opt, quiet())
+
+	if res.Scanned != 2 {
+		t.Fatalf("scanned = %d, expected both pages", res.Scanned)
+	}
+	if !seen.Known("b") {
+		t.Error("the listing on the second page was never read")
 	}
 }

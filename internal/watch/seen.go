@@ -38,14 +38,22 @@ const (
 )
 
 type Record struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	Title     string    `json:"title"`
-	Tokens    []string  `json:"tokens"`
-	Price     float64   `json:"price"`
-	Hashes    []uint64  `json:"hashes,omitempty"`
-	City      string    `json:"city,omitempty"`
-	Search    string    `json:"search,omitempty"`
+	ID     string   `json:"id"`
+	UserID string   `json:"user_id"`
+	Title  string   `json:"title"`
+	Tokens []string `json:"tokens"`
+	Price  float64  `json:"price"`
+	// Lowest is the cheapest this listing has ever been while watched. Drops are measured
+	// against it and not against yesterday's price, so a seller bouncing between two
+	// numbers is announced once and not every week.
+	Lowest float64  `json:"lowest,omitempty"`
+	Hashes []uint64 `json:"hashes,omitempty"`
+	City   string   `json:"city,omitempty"`
+	Search string   `json:"search,omitempty"`
+	// CopyOf is the listing this one turned out to be a copy of. A copy is never
+	// announced, and that holds for its price as much as for its arrival: eleven accounts
+	// repricing one van is one piece of news.
+	CopyOf    string    `json:"copy_of,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 }
 
@@ -163,6 +171,15 @@ func closestPhoto(a, b []uint64) int {
 }
 
 func (s *Seen) Add(item wallapop.SearchItem, hashes []uint64, search string, at time.Time) {
+	s.add(item, hashes, search, "", at)
+}
+
+// AddCopy records a listing that is another one under a different id.
+func (s *Seen) AddCopy(item wallapop.SearchItem, hashes []uint64, search, copyOf string, at time.Time) {
+	s.add(item, hashes, search, copyOf, at)
+}
+
+func (s *Seen) add(item wallapop.SearchItem, hashes []uint64, search, copyOf string, at time.Time) {
 	if i, ok := s.index[item.ID]; ok {
 		s.Records[i].Search = search
 		return
@@ -173,12 +190,44 @@ func (s *Seen) Add(item wallapop.SearchItem, hashes []uint64, search string, at 
 		Title:     item.Title,
 		Tokens:    Tokenize(item.Title),
 		Price:     item.Price.Amount,
+		Lowest:    item.Price.Amount,
 		Hashes:    hashes,
 		City:      item.Where(),
 		Search:    search,
+		CopyOf:    copyOf,
 		FirstSeen: at,
 	})
 	s.index[item.ID] = len(s.Records) - 1
+}
+
+// Cheaper reports a listing that now costs less than it ever has, by enough to be worth
+// saying. It answers false for a copy: the listing it copies is the one that speaks.
+//
+// The stored price is refreshed either way, so the same drop is never announced twice and
+// a price going back up is simply remembered.
+func (s *Seen) Cheaper(item wallapop.SearchItem, drop float64) (before float64, worth bool) {
+	i, ok := s.index[item.ID]
+	if !ok {
+		return 0, false
+	}
+	rec := &s.Records[i]
+
+	now := item.Price.Amount
+	was := rec.Lowest
+	if was == 0 {
+		was = rec.Price
+	}
+	defer func() {
+		rec.Price = now
+		if now < rec.Lowest || rec.Lowest == 0 {
+			rec.Lowest = now
+		}
+	}()
+
+	if rec.CopyOf != "" || now <= 0 || was <= 0 || now >= was {
+		return was, false
+	}
+	return was, (was-now)/was >= drop
 }
 
 // Prune drops what is too old to be a duplicate of anything arriving now, which is what
