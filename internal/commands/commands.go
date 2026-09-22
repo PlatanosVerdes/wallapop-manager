@@ -19,15 +19,28 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
 )
 
-// Prefix is the service's corner of a shared bot.
-const Prefix = "wp_"
+// Prefix is the service's corner of a shared bot: commands are wp_something, and the data
+// a button sends back starts with wp:. Anything else belongs to another service.
+const (
+	Prefix     = "wp_"
+	DataPrefix = "wp:"
+)
 
 type Command struct {
 	// Name carries the prefix and no slash: "wp_status".
 	Name string
 	Help string
-	Run  func(ctx context.Context) (string, error)
+	Run  func(ctx context.Context) (Reply, error)
 }
+
+// Reply is what a command answers: the text, and the buttons it hangs from when there is
+// something to press.
+type Reply struct {
+	Text string
+	Keys *telegram.Keyboard
+}
+
+func Say(text string) Reply { return Reply{Text: text} }
 
 type Listener struct {
 	Bot *telegram.Bot
@@ -35,6 +48,9 @@ type Listener struct {
 	// write to it, and nobody else gets an answer.
 	Chat     string
 	Commands []Command
+	// OnButton answers a press. The notice is the banner raised on the phone, and a
+	// keyboard that comes back redraws the one that was pressed.
+	OnButton func(ctx context.Context, data string) (notice string, keys *telegram.Keyboard, err error)
 	Log      *slog.Logger
 	// Backoff is the wait after a failed poll.
 	Backoff time.Duration
@@ -75,10 +91,15 @@ func (l *Listener) Serve(ctx context.Context) error {
 
 		for _, update := range updates {
 			offset = update.UpdateID + 1
-			if bootstrap || update.Message == nil {
+			if bootstrap {
 				continue
 			}
-			l.handle(ctx, *update.Message)
+			switch {
+			case update.CallbackQuery != nil:
+				l.press(ctx, *update.CallbackQuery)
+			case update.Message != nil:
+				l.handle(ctx, *update.Message)
+			}
 		}
 		bootstrap = false
 	}
@@ -107,11 +128,11 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 			continue
 		}
 		l.Log.Info("command", "name", name)
-		answer, err := cmd.Run(ctx)
+		reply, err := cmd.Run(ctx)
 		if err != nil {
-			answer = "no ha podido ser: " + err.Error()
+			reply = Reply{Text: "no ha podido ser: " + err.Error()}
 		}
-		if err := l.Bot.Text(ctx, telegram.Escape(answer)); err != nil {
+		if err := l.Bot.Text(ctx, telegram.Escape(reply.Text), reply.Keys); err != nil {
 			l.Log.Error("could not answer", "command", name, "err", err)
 		}
 		return
@@ -121,6 +142,34 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 	// shared bot argue with itself.
 	if strings.HasPrefix(name, Prefix) {
 		l.Log.Info("unknown command", "name", name)
+	}
+}
+
+// press deals with a button. Telegram leaves the phone spinning until the query is
+// answered, so every path out of here answers it.
+func (l *Listener) press(ctx context.Context, query telegram.CallbackQuery) {
+	if query.Message == nil || strconv.FormatInt(query.Message.Chat.ID, 10) != l.Chat {
+		l.Log.Warn("a button press from another chat was ignored")
+		_ = l.Bot.Answer(ctx, query.ID, "")
+		return
+	}
+	if !strings.HasPrefix(query.Data, DataPrefix) || l.OnButton == nil {
+		_ = l.Bot.Answer(ctx, query.ID, "")
+		return
+	}
+
+	l.Log.Info("button", "data", query.Data)
+	notice, keys, err := l.OnButton(ctx, query.Data)
+	if err != nil {
+		notice = "no ha podido ser: " + err.Error()
+	}
+	if err := l.Bot.Answer(ctx, query.ID, notice); err != nil {
+		l.Log.Error("could not close the button press", "err", err)
+	}
+	if err == nil && keys != nil {
+		if err := l.Bot.EditKeys(ctx, query.Message.MessageID, keys); err != nil {
+			l.Log.Error("could not redraw the buttons", "err", err)
+		}
 	}
 }
 

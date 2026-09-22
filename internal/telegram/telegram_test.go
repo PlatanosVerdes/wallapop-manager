@@ -36,7 +36,7 @@ func TestPhotoFallsBackToText(t *testing.T) {
 
 	bot := New("token", "chat")
 	bot.APIURL = srv.URL + "/bot"
-	if err := bot.Photo(context.Background(), "https://example.test/a.jpg", "un anuncio"); err != nil {
+	if err := bot.Photo(context.Background(), "https://example.test/a.jpg", "un anuncio", nil); err != nil {
 		t.Fatalf("the message did not get through: %v", err)
 	}
 	if len(called) != 2 || !strings.HasSuffix(called[1], "sendMessage") {
@@ -55,7 +55,7 @@ func TestLongCaptionSkipsThePhoto(t *testing.T) {
 
 	bot := New("token", "chat")
 	bot.APIURL = srv.URL + "/bot"
-	if err := bot.Photo(context.Background(), "https://example.test/a.jpg", strings.Repeat("x", captionLimit+1)); err != nil {
+	if err := bot.Photo(context.Background(), "https://example.test/a.jpg", strings.Repeat("x", captionLimit+1), nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(called) != 1 || !strings.HasSuffix(called[0], "sendMessage") {
@@ -64,7 +64,7 @@ func TestLongCaptionSkipsThePhoto(t *testing.T) {
 }
 
 func TestNothingIsSentWithoutAToken(t *testing.T) {
-	if err := New("", "").Photo(context.Background(), "x", "y"); err != nil {
+	if err := New("", "").Photo(context.Background(), "x", "y", nil); err != nil {
 		t.Errorf("an unconfigured bot returned an error instead of staying quiet: %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestErrorsDoNotCarryTheToken(t *testing.T) {
 
 	bot := New("secret-token", "chat")
 	bot.APIURL = srv.URL + "/bot"
-	err := bot.Text(context.Background(), "hola")
+	err := bot.Text(context.Background(), "hola", nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

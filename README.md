@@ -101,10 +101,25 @@ It announces without being asked, and answers four things when it is:
 
 | Command | What it says |
 | :--- | :--- |
-| `/wp_searches` | The searches being watched. The ones switched off in the app are counted, not listed: the terminal command prints those, with their queries |
+| `/wp_searches` | The searches being watched, each with a switch: pressing it silences that search, pressing it again gives it back. The ones switched off in the app are counted, not listed: the terminal command prints those, with their queries |
 | `/wp_status` | The last round, the next one, and how long the session has left |
 | `/wp_check` | Runs a round now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
 | `/wp_help` | The list above, built from the same table the bot dispatches from |
+
+Every announced listing carries one button, **silence this search**, because the moment it
+is clear that a search is talking too much is the moment one of its messages arrives.
+
+Silence is this service's own state, kept in `data/mutes.json`. It never writes to
+Wallapop: the alert switch in the app stays where its owner left it, and a silenced search
+is simply one this has nothing to say about for now. So the app can have a search on while
+the bot is quiet about it, and turning it back on here changes nothing over there.
+
+A button press is a `callback_query`, which is only delivered when `allowed_updates` asks
+for it, carries at most 64 bytes of `callback_data` (a saved search id is a 36 character
+uuid, so the verb in front of it has to be short), and must be answered with
+`answerCallbackQuery` or the phone spins until the press expires. The keyboard is then
+redrawn in place with `editMessageReplyMarkup`, so the switch shows the position it was
+just moved to.
 
 Two rules come from the bot being shared with the other small services on the Pi:
 

@@ -5,6 +5,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,35 +49,42 @@ func (b *Bot) Enabled() bool { return b != nil && b.Token != "" && b.Chat != "" 
 
 // Photo sends the picture with the text under it, and falls back to the text alone when
 // Telegram will not take the image: a listing is worth sending without its photo.
-func (b *Bot) Photo(ctx context.Context, photo, caption string) error {
+func (b *Bot) Photo(ctx context.Context, photo, caption string, keys *Keyboard) error {
 	if !b.Enabled() {
 		return nil
 	}
 	if photo == "" || len(caption) > captionLimit {
-		return b.Text(ctx, caption)
+		return b.Text(ctx, caption, keys)
 	}
-	err := b.call(ctx, "sendPhoto", url.Values{
+	form := url.Values{
 		"chat_id":    {b.Chat},
 		"photo":      {photo},
 		"caption":    {caption},
 		"parse_mode": {"HTML"},
-	})
-	if err == nil {
+	}
+	if err := withKeys(form, keys); err != nil {
+		return err
+	}
+	if err := b.call(ctx, "sendPhoto", form); err == nil {
 		return nil
 	}
-	return b.Text(ctx, caption)
+	return b.Text(ctx, caption, keys)
 }
 
-func (b *Bot) Text(ctx context.Context, text string) error {
+func (b *Bot) Text(ctx context.Context, text string, keys *Keyboard) error {
 	if !b.Enabled() {
 		return nil
 	}
-	return b.call(ctx, "sendMessage", url.Values{
+	form := url.Values{
 		"chat_id":                  {b.Chat},
 		"text":                     {text},
 		"parse_mode":               {"HTML"},
 		"disable_web_page_preview": {"true"},
-	})
+	}
+	if err := withKeys(form, keys); err != nil {
+		return err
+	}
+	return b.call(ctx, "sendMessage", form)
 }
 
 func (b *Bot) call(ctx context.Context, method string, form url.Values) error {
@@ -116,14 +124,24 @@ type Chat struct {
 }
 
 type Message struct {
-	Date int64  `json:"date"`
-	Text string `json:"text"`
-	Chat Chat   `json:"chat"`
+	MessageID int64  `json:"message_id"`
+	Date      int64  `json:"date"`
+	Text      string `json:"text"`
+	Chat      Chat   `json:"chat"`
 }
 
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"`
+}
+
+// CallbackQuery is a button press. Message is the one the button hangs from, which is
+// what an edit needs to redraw it.
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	Data    string   `json:"data"`
+	Message *Message `json:"message"`
 }
 
 // Updates asks for everything after offset, waiting for it. An offset of -1 answers the
@@ -135,8 +153,10 @@ func (b *Bot) Updates(ctx context.Context, offset int64) ([]Update, error) {
 	}
 
 	form := url.Values{
-		"timeout":         {strconv.Itoa(pollSeconds)},
-		"allowed_updates": {`["message"]`},
+		"timeout": {strconv.Itoa(pollSeconds)},
+		// A button press arrives as a callback_query, and an update type left out of this
+		// list is never delivered at all.
+		"allowed_updates": {`["message","callback_query"]`},
 	}
 	if offset != 0 {
 		form.Set("offset", strconv.FormatInt(offset, 10))
@@ -192,4 +212,97 @@ func (b *Bot) get(ctx context.Context, method string, form url.Values, out any) 
 		return fmt.Errorf("telegram %s answered %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return json.Unmarshal(raw, out)
+}
+
+// Button is one key of an inline keyboard. Data is what comes back when it is pressed and
+// is capped by Telegram at 64 bytes, so it carries an id and never a payload.
+type Button struct {
+	Text string `json:"text"`
+	Data string `json:"callback_data,omitempty"`
+	// Style is "danger", "success" or "primary". Empty is the plain button.
+	Style string `json:"style,omitempty"`
+	// Disabled draws the key as a label that does nothing, which is what a switch already
+	// in the position asked for should look like.
+	Disabled *Disabled `json:"disabled,omitempty"`
+}
+
+type Disabled struct{}
+
+// Off is the button that says what happened and cannot be pressed again.
+func Off(text string) Button { return Button{Text: text, Disabled: &Disabled{}} }
+
+type Keyboard struct {
+	Rows [][]Button `json:"inline_keyboard"`
+}
+
+// DataLimit is Telegram's ceiling on callback_data. Going over it does not drop the
+// button: the whole message is refused.
+const DataLimit = 64
+
+var ErrDataTooLong = errors.New("telegram: callback data is over 64 bytes")
+
+func withKeys(form url.Values, keys *Keyboard) error {
+	if keys == nil || len(keys.Rows) == 0 {
+		return nil
+	}
+	for _, row := range keys.Rows {
+		for _, button := range row {
+			if len(button.Data) > DataLimit {
+				return fmt.Errorf("%w: %q", ErrDataTooLong, button.Data)
+			}
+		}
+	}
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	form.Set("reply_markup", string(encoded))
+	return nil
+}
+
+// Answer closes a button press. Telegram spins on the phone until this arrives and then
+// gives up on it, so it is sent whatever the outcome was.
+func (b *Bot) Answer(ctx context.Context, queryID, notice string) error {
+	if !b.Enabled() {
+		return nil
+	}
+	form := url.Values{"callback_query_id": {queryID}}
+	if notice != "" {
+		form.Set("text", truncate(notice, noticeLimit))
+	}
+	return b.call(ctx, "answerCallbackQuery", form)
+}
+
+// EditKeys redraws the buttons of a message in place, which is how a switch shows the
+// position it was just moved to.
+func (b *Bot) EditKeys(ctx context.Context, messageID int64, keys *Keyboard) error {
+	if !b.Enabled() || messageID == 0 {
+		return nil
+	}
+	form := url.Values{
+		"chat_id":    {b.Chat},
+		"message_id": {strconv.FormatInt(messageID, 10)},
+	}
+	if keys == nil {
+		keys = &Keyboard{}
+	}
+	if err := withKeys(form, keys); err != nil {
+		return err
+	}
+	// An empty keyboard has to go as an explicit object, or the buttons stay where they
+	// were.
+	if form.Get("reply_markup") == "" {
+		form.Set("reply_markup", `{"inline_keyboard":[]}`)
+	}
+	return b.call(ctx, "editMessageReplyMarkup", form)
+}
+
+// noticeLimit is the length of the little banner a press raises on the phone.
+const noticeLimit = 200
+
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit-1] + "…"
 }

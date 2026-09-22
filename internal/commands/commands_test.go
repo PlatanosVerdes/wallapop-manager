@@ -36,6 +36,9 @@ type telegramFake struct {
 	mu       sync.Mutex
 	updates  []telegram.Update
 	sent     []string
+	keys     []string
+	answered []string
+	edited   []string
 	menu     string
 	served   chan struct{}
 	requests int
@@ -74,6 +77,11 @@ func (f *telegramFake) server(t *testing.T) *telegram.Bot {
 			return
 		case strings.HasSuffix(r.URL.Path, "sendMessage"):
 			f.sent = append(f.sent, r.Form.Get("text"))
+			f.keys = append(f.keys, r.Form.Get("reply_markup"))
+		case strings.HasSuffix(r.URL.Path, "answerCallbackQuery"):
+			f.answered = append(f.answered, r.Form.Get("text"))
+		case strings.HasSuffix(r.URL.Path, "editMessageReplyMarkup"):
+			f.edited = append(f.edited, r.Form.Get("reply_markup"))
 		}
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
@@ -126,7 +134,7 @@ func TestCommandIsAnswered(t *testing.T) {
 		message(2, 1308329178, "/wp_status"),
 	}}
 	sent := listen(t, fake, []Command{
-		{Name: "wp_status", Help: "estado", Run: func(context.Context) (string, error) { return "todo en orden", nil }},
+		{Name: "wp_status", Help: "estado", Run: func(context.Context) (Reply, error) { return Say("todo en orden"), nil }},
 	})
 
 	if len(sent) != 1 || sent[0] != "todo en orden" {
@@ -143,7 +151,7 @@ func TestAnotherChatIsIgnored(t *testing.T) {
 		message(2, 999999, "/wp_status"),
 	}}
 	sent := listen(t, fake, []Command{
-		{Name: "wp_status", Run: func(context.Context) (string, error) { return "secreto", nil }},
+		{Name: "wp_status", Run: func(context.Context) (Reply, error) { return Say("secreto"), nil }},
 	})
 	if len(sent) != 0 {
 		t.Fatalf("a stranger was answered: %v", sent)
@@ -164,7 +172,7 @@ func TestUnknownCommandStaysQuiet(t *testing.T) {
 func TestFailedCommandAnswersWhy(t *testing.T) {
 	fake := &telegramFake{updates: []telegram.Update{message(2, 1308329178, "/wp_check")}}
 	sent := listen(t, fake, []Command{
-		{Name: "wp_check", Run: func(context.Context) (string, error) { return "", ErrBusy }},
+		{Name: "wp_check", Run: func(context.Context) (Reply, error) { return Reply{}, ErrBusy }},
 	})
 	if len(sent) != 1 || !strings.Contains(sent[0], "ronda en marcha") {
 		t.Fatalf("answers were %v", sent)
@@ -192,9 +200,96 @@ func TestNothingIsReplayedAfterARestart(t *testing.T) {
 	}
 	var ran int
 	sent := listen(t, fake, []Command{
-		{Name: "wp_check", Run: func(context.Context) (string, error) { ran++; return "hecho", nil }},
+		{Name: "wp_check", Run: func(context.Context) (Reply, error) { ran++; return Say("hecho"), nil }},
 	})
 	if ran != 0 || len(sent) != 0 {
 		t.Fatalf("a queued command was replayed on startup: ran %d, sent %v", ran, sent)
+	}
+}
+
+func TestButtonIsAnsweredAndRedrawn(t *testing.T) {
+	fake := &telegramFake{updates: []telegram.Update{{
+		UpdateID: 2,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:      "q1",
+			Data:    DataPrefix + "t:c6ae82bf-ccbe-4a8a-9981-5c7487a05940",
+			Message: &telegram.Message{MessageID: 77, Chat: telegram.Chat{ID: 1308329178}},
+		},
+	}}}
+	fake.served = make(chan struct{})
+	fake.serveOn = 2
+
+	listener := &Listener{
+		Bot:  fake.server(t),
+		Chat: "1308329178",
+		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnButton: func(_ context.Context, data string) (string, *telegram.Keyboard, error) {
+			return "Silenciada Motos", &telegram.Keyboard{Rows: [][]telegram.Button{{{Text: "🔕 Motos", Data: data}}}}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = listener.Serve(ctx); close(done) }()
+	select {
+	case <-fake.served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the press never arrived")
+	}
+	cancel()
+	<-done
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	// Telegram spins on the phone until the query is closed, whatever the outcome.
+	if len(fake.answered) != 1 || fake.answered[0] != "Silenciada Motos" {
+		t.Fatalf("the press was answered with %v", fake.answered)
+	}
+	if len(fake.edited) != 1 || !strings.Contains(fake.edited[0], "🔕 Motos") {
+		t.Fatalf("the buttons were redrawn as %v", fake.edited)
+	}
+}
+
+func TestButtonFromAnotherChatIsIgnored(t *testing.T) {
+	fake := &telegramFake{updates: []telegram.Update{{
+		UpdateID: 2,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:      "q1",
+			Data:    DataPrefix + "t:whatever",
+			Message: &telegram.Message{MessageID: 5, Chat: telegram.Chat{ID: 999}},
+		},
+	}}}
+	fake.served = make(chan struct{})
+	fake.serveOn = 2
+
+	var ran bool
+	listener := &Listener{
+		Bot:  fake.server(t),
+		Chat: "1308329178",
+		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnButton: func(context.Context, string) (string, *telegram.Keyboard, error) {
+			ran = true
+			return "no deberia", nil, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = listener.Serve(ctx); close(done) }()
+	select {
+	case <-fake.served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the press never arrived")
+	}
+	cancel()
+	<-done
+
+	if ran {
+		t.Fatal("a stranger's button press was acted on")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.edited) != 0 {
+		t.Fatalf("something was redrawn for a stranger: %v", fake.edited)
 	}
 }

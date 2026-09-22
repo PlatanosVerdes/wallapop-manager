@@ -28,12 +28,15 @@ type Options struct {
 	PhotosPerItem      int
 	SeenTTL            time.Duration
 	MinPause, MaxPause time.Duration
-	DryRun             bool
+	// Mutes are the searches silenced from the bot. Nil watches everything the app says.
+	Mutes  *Mutes
+	DryRun bool
 }
 
-// Notifier is what says a listing out loud.
+// Notifier is what says a listing out loud. The whole search goes through because the
+// message carries a button to silence it, and that needs its id.
 type Notifier interface {
-	Listing(ctx context.Context, search string, item wallapop.SearchItem) error
+	Listing(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error
 	Say(ctx context.Context, text string) error
 }
 
@@ -54,10 +57,12 @@ type Result struct {
 	StartedAt time.Time     `json:"started_at"`
 	Duration  time.Duration `json:"duration"`
 	DryRun    bool          `json:"dry_run,omitempty"`
-	// Watched and Ignored split the saved searches by the alert switch in the app.
-	Watched int `json:"watched"`
-	Ignored int `json:"ignored"`
-	Scanned int `json:"scanned"`
+	// Watched and Ignored split the saved searches by the alert switch in the app, and
+	// Silenced counts the ones switched off from the bot instead.
+	Watched  int `json:"watched"`
+	Ignored  int `json:"ignored"`
+	Silenced int `json:"silenced,omitempty"`
+	Scanned  int `json:"scanned"`
 	// Seeded is what was recorded without a message: the first pass of a search, and
 	// listings already too old to be news.
 	Seeded     int       `json:"seeded"`
@@ -76,6 +81,9 @@ func (r Result) Summary() string {
 		return "wallapop: la ronda de busquedas ha fallado: " + r.Error
 	}
 	msg := fmt.Sprintf("wallapop: %d busquedas, %d anuncios mirados, %d nuevos", r.Watched, r.Scanned, len(r.New))
+	if r.Silenced > 0 {
+		msg += fmt.Sprintf(", %d silenciadas", r.Silenced)
+	}
 	if r.Duplicates > 0 {
 		msg += fmt.Sprintf(", %d repetidos descartados", r.Duplicates)
 	}
@@ -110,6 +118,12 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 		// turned off, and this must not quietly turn it back on.
 		if !search.Alert.Enabled && !opt.All {
 			res.Ignored++
+			continue
+		}
+		// Silenced from the bot: the app still has its alert on, this just has nothing to
+		// say about it for now.
+		if opt.Mutes.IsMuted(search.ID) {
+			res.Silenced++
 			continue
 		}
 		res.Watched++
@@ -161,7 +175,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 				if notify == nil {
 					continue
 				}
-				if err := notify.Listing(ctx, search.Name(), item); err != nil {
+				if err := notify.Listing(ctx, search, item); err != nil {
 					log.Error("could not send the message", "title", item.Title, "err", err)
 					res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
 				}

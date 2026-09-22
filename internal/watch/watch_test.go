@@ -29,8 +29,8 @@ type recorder struct {
 	said     []string
 }
 
-func (r *recorder) Listing(_ context.Context, search string, item wallapop.SearchItem) error {
-	r.listings = append(r.listings, search+"|"+item.Title)
+func (r *recorder) Listing(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error {
+	r.listings = append(r.listings, search.Name()+"|"+item.Title)
 	return nil
 }
 
@@ -230,5 +230,35 @@ func TestLine(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the message does not carry %q:\n%s", want, got)
 		}
+	}
+}
+
+// A silenced search is not read at all: the app still has its alert on, this just has
+// nothing to say about it.
+func TestSilencedSearchIsSkipped(t *testing.T) {
+	fake := &fakeWallapop{searches: []wallapop.SavedSearch{
+		newSearch("s1", "kallax", true),
+		newSearch("s2", "motos", true),
+	}}
+	client, opt := newWatcher(t, fake)
+	fake.items = []wallapop.SearchItem{newItem("a", "Algo nuevo", 10, time.Minute, fake.photo("a"))}
+
+	mutes, err := LoadMutes(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mutes.Toggle("s2", "motos"); err != nil {
+		t.Fatal(err)
+	}
+	opt.Mutes = mutes
+
+	seen, _ := LoadSeen(t.TempDir())
+	res := Run(context.Background(), client, seen, &recorder{}, opt, quiet())
+
+	if res.Watched != 1 || res.Silenced != 1 {
+		t.Fatalf("watched=%d silenced=%d, expected 1 and 1", res.Watched, res.Silenced)
+	}
+	if len(fake.queries) != 1 {
+		t.Fatalf("%d searches were run, expected only the one that is not silenced", len(fake.queries))
 	}
 }
