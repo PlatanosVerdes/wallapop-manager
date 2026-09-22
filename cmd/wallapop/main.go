@@ -74,7 +74,7 @@ func run(args []string) error {
 	case "watch":
 		return cmdWatch(cfg, store, log, args[1:])
 	case "searches":
-		return cmdSearches(cfg, store)
+		return cmdSearches(cfg, store, args[1:])
 	case "serve":
 		return cmdServe(cfg, store, log, args[1:])
 	case "session":
@@ -260,8 +260,14 @@ func cmdWatch(cfg config.Config, store *session.Store, log *slog.Logger, args []
 	return nil
 }
 
-func cmdSearches(cfg config.Config, store *session.Store) error {
-	report, err := searchesReport(context.Background(), cfg, store, true)
+func cmdSearches(cfg config.Config, store *session.Store, args []string) error {
+	fs := flag.NewFlagSet("searches", flag.ExitOnError)
+	short := fs.Bool("short", false, "only the watched ones, as the bot answers them")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	report, err := searchesReport(context.Background(), cfg, store, !*short)
 	if err != nil {
 		return err
 	}
@@ -269,8 +275,8 @@ func cmdSearches(cfg config.Config, store *session.Store) error {
 	return nil
 }
 
-// searchesReport says what is watched and what is not. The long form carries each query,
-// which is worth reading on a terminal and unreadable on a phone.
+// searchesReport says what is being watched. The long form adds the ones switched off and
+// each stored query, which is worth reading on a terminal and unreadable on a phone.
 func searchesReport(ctx context.Context, cfg config.Config, store *session.Store, long bool) (string, error) {
 	if _, err := store.Load(); err != nil {
 		return "", err
@@ -284,20 +290,35 @@ func searchesReport(ctx context.Context, cfg config.Config, store *session.Store
 	}
 
 	var b strings.Builder
-	watched := 0
+	watched, off := 0, 0
 	for _, search := range searches {
-		mark := "off"
-		if search.Alert.Enabled || cfg.WatchAll {
-			mark = "ON "
-			watched++
-		}
-		fmt.Fprintf(&b, "%s  %-28s %s\n", mark, search.Name(), search.LocationLabel)
-		if long {
+		if !search.Alert.Enabled && !cfg.WatchAll {
+			off++
+			if !long {
+				continue
+			}
+			fmt.Fprintf(&b, "off  %-28s %s\n", search.Name(), search.LocationLabel)
 			fmt.Fprintf(&b, "     %s\n", search.Values().Encode())
+			continue
 		}
+
+		watched++
+		if long {
+			fmt.Fprintf(&b, "ON   %-28s %s\n", search.Name(), search.LocationLabel)
+			fmt.Fprintf(&b, "     %s\n", search.Values().Encode())
+			continue
+		}
+		fmt.Fprintf(&b, "• %s — %s\n", search.Name(), search.LocationLabel)
 	}
-	fmt.Fprintf(&b, "\nVigilo %d de %d. El interruptor es el de la app: aqui no se toca ninguna.",
-		watched, len(searches))
+
+	switch {
+	case watched == 0:
+		return fmt.Sprintf("No vigilo ninguna: las %d estan apagadas en la app.", off), nil
+	case off > 0:
+		fmt.Fprintf(&b, "\nVigilo %d. Las otras %d las tienes apagadas en la app.", watched, off)
+	default:
+		fmt.Fprintf(&b, "\nVigilo las %d.", watched)
+	}
 	if cfg.WatchAll {
 		b.WriteString("\nWALLA_WATCH_ALL esta puesto, asi que se vigilan todas.")
 	}

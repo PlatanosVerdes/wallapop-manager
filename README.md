@@ -101,7 +101,7 @@ It announces without being asked, and answers four things when it is:
 
 | Command | What it says |
 | :--- | :--- |
-| `/wp_searches` | The saved searches, and which of them are watched |
+| `/wp_searches` | The searches being watched. The ones switched off in the app are counted, not listed: the terminal command prints those, with their queries |
 | `/wp_status` | The last round, the next one, and how long the session has left |
 | `/wp_check` | Runs a round now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
 | `/wp_help` | The list above, built from the same table the bot dispatches from |
