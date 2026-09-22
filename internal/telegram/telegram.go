@@ -219,6 +219,8 @@ func (b *Bot) get(ctx context.Context, method string, form url.Values, out any) 
 type Button struct {
 	Text string `json:"text"`
 	Data string `json:"callback_data,omitempty"`
+	// URL turns the key into a link, which is tidier than a raw address in the text.
+	URL string `json:"url,omitempty"`
 	// Style is "danger", "success" or "primary". Empty is the plain button.
 	Style string `json:"style,omitempty"`
 	// Disabled draws the key as a label that does nothing, which is what a switch already

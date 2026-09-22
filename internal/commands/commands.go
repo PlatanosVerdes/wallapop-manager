@@ -33,8 +33,8 @@ type Command struct {
 	Run  func(ctx context.Context) (Reply, error)
 }
 
-// Reply is what a command answers: the text, and the buttons it hangs from when there is
-// something to press.
+// Reply is what a command answers. Text is HTML, because a message read on a phone needs
+// weight and not columns: whoever builds it escapes what came from a stranger.
 type Reply struct {
 	Text string
 	Keys *telegram.Keyboard
@@ -130,9 +130,9 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 		l.Log.Info("command", "name", name)
 		reply, err := cmd.Run(ctx)
 		if err != nil {
-			reply = Reply{Text: "no ha podido ser: " + err.Error()}
+			reply = Reply{Text: "⚠️ no ha podido ser: " + telegram.Escape(err.Error())}
 		}
-		if err := l.Bot.Text(ctx, telegram.Escape(reply.Text), reply.Keys); err != nil {
+		if err := l.Bot.Text(ctx, reply.Text, reply.Keys); err != nil {
 			l.Log.Error("could not answer", "command", name, "err", err)
 		}
 		return
@@ -190,9 +190,9 @@ func parse(text string) string {
 // Help is the answer to the help command, built from the table so it cannot drift from it.
 func Help(commands []Command) string {
 	var b strings.Builder
-	b.WriteString("Lo que entiendo:\n")
+	b.WriteString("🤖 <b>Lo que entiendo</b>\n\n")
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "/%s — %s\n", cmd.Name, cmd.Help)
+		fmt.Fprintf(&b, "/%s\n<i>%s</i>\n", cmd.Name, telegram.Escape(cmd.Help))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

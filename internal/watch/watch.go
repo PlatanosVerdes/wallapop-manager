@@ -263,18 +263,18 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "🆕 <b>%s</b>\n", escape(item.Title))
-	fmt.Fprintf(&b, "%s", Money(item.Price.Amount, item.Price.Currency))
+	fmt.Fprintf(&b, "<b>%s</b>", Money(item.Price.Amount, item.Price.Currency))
 	if where := item.Where(); where != "" {
 		fmt.Fprintf(&b, " · %s", escape(where))
 	}
 	if item.Reserved != nil && item.Reserved.Flag {
-		b.WriteString(" · reservado")
+		b.WriteString(" · <i>reservado</i>")
 	}
 	// The bot is shared with the other small services, so the message says who is talking.
+	// The listing's own address hangs from a button instead of sitting in the text.
 	if search != "" {
-		fmt.Fprintf(&b, "\n🔎 wallapop · %s", escape(search))
+		fmt.Fprintf(&b, "\n<i>🔎 wallapop · %s</i>", escape(search))
 	}
-	fmt.Fprintf(&b, "\n%s", item.URL())
 	return b.String()
 }
 

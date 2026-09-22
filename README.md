@@ -106,8 +106,14 @@ It announces without being asked, and answers four things when it is:
 | `/wp_check` | Runs a round now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
 | `/wp_help` | The list above, built from the same table the bot dispatches from |
 
-Every announced listing carries one button, **silence this search**, because the moment it
-is clear that a search is talking too much is the moment one of its messages arrives.
+Every announced listing carries two buttons, **open the listing** and **silence this
+search**, because the moment it is clear that a search is talking too much is the moment
+one of its messages arrives. The address rides on the button rather than in the text.
+
+Telegram draws messages in a proportional font, so columns padded with spaces only line up
+inside `<pre>`. The grid of watched searches is a `<pre>` block and everything else leans
+on `<b>` and `<i>`; the long listing with each stored query stays on the terminal, which is
+the only place it is readable.
 
 Silence is this service's own state, kept in `data/mutes.json`. It never writes to
 Wallapop: the alert switch in the app stays where its owner left it, and a silenced search

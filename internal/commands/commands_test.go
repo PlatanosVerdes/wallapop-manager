@@ -184,7 +184,7 @@ func TestHelpIsBuiltFromTheTable(t *testing.T) {
 		{Name: "wp_status", Help: "estado"},
 		{Name: "wp_check", Help: "mira ahora"},
 	})
-	for _, want := range []string{"/wp_status — estado", "/wp_check — mira ahora"} {
+	for _, want := range []string{"/wp_status\n<i>estado</i>", "/wp_check\n<i>mira ahora</i>"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help does not carry %q:\n%s", want, got)
 		}

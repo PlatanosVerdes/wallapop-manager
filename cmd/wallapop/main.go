@@ -284,111 +284,210 @@ func cmdSearches(cfg config.Config, store *session.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	report, err := searchesReport(context.Background(), cfg, store, !*short, mutes)
+	rows, err := searchRows(context.Background(), cfg, store, mutes)
 	if err != nil {
 		return err
 	}
-	fmt.Println(report)
+	if len(rows) == 0 {
+		fmt.Println("no hay busquedas guardadas en la cuenta")
+		return nil
+	}
+	if *short {
+		fmt.Println(htmlSearches(rows))
+		return nil
+	}
+	fmt.Println(plainSearches(rows))
 	return nil
 }
 
-// searchesReport says what is being watched. The long form adds the ones switched off and
-// each stored query, which is worth reading on a terminal and unreadable on a phone.
-func searchesReport(ctx context.Context, cfg config.Config, store *session.Store, long bool, mutes *watch.Mutes) (string, error) {
+// searchRow is one saved search as both readers need it: the terminal wants the query, the
+// phone wants to know whether it will hear from it.
+type searchRow struct {
+	Name     string
+	Location string
+	Query    string
+	// Off is the alert switched off in the app; Muted is switched off from the bot.
+	Off   bool
+	Muted bool
+}
+
+func searchRows(ctx context.Context, cfg config.Config, store *session.Store, mutes *watch.Mutes) ([]searchRow, error) {
 	if _, err := store.Load(); err != nil {
-		return "", err
+		return nil, err
 	}
 	searches, err := newClient(cfg, store).SavedSearches(ctx)
 	if err != nil {
-		return "", err
-	}
-	if len(searches) == 0 {
-		return "no hay busquedas guardadas en la cuenta", nil
+		return nil, err
 	}
 
-	var b strings.Builder
-	watched, off, silenced := 0, 0, 0
+	rows := make([]searchRow, 0, len(searches))
 	for _, search := range searches {
-		if !search.Alert.Enabled && !cfg.WatchAll {
-			off++
-			if !long {
-				continue
-			}
-			fmt.Fprintf(&b, "off  %-28s %s\n", search.Name(), search.LocationLabel)
-			fmt.Fprintf(&b, "     %s\n", search.Values().Encode())
-			continue
-		}
-
-		mark, bell := "ON  ", "🔔"
-		if mutes.IsMuted(search.ID) {
-			mark, bell = "MUTE", "🔕"
-			silenced++
-		} else {
-			watched++
-		}
-		if long {
-			fmt.Fprintf(&b, "%s %-28s %s\n", mark, search.Name(), search.LocationLabel)
-			fmt.Fprintf(&b, "     %s\n", search.Values().Encode())
-			continue
-		}
-		fmt.Fprintf(&b, "%s %s — %s\n", bell, search.Name(), search.LocationLabel)
+		rows = append(rows, searchRow{
+			Name:     search.Name(),
+			Location: search.LocationLabel,
+			Query:    search.Values().Encode(),
+			Off:      !search.Alert.Enabled && !cfg.WatchAll,
+			Muted:    mutes.IsMuted(search.ID),
+		})
 	}
-
-	switch {
-	case watched == 0 && silenced == 0:
-		return fmt.Sprintf("No vigilo ninguna: las %d estan apagadas en la app.", off), nil
-	case off > 0:
-		fmt.Fprintf(&b, "\nVigilo %d. Las otras %d las tienes apagadas en la app.", watched, off)
-	default:
-		fmt.Fprintf(&b, "\nVigilo %d.", watched)
-	}
-	if silenced > 0 {
-		fmt.Fprintf(&b, " %d silenciadas desde aqui: el boton las devuelve.", silenced)
-	}
-	if cfg.WatchAll {
-		b.WriteString("\nWALLA_WATCH_ALL esta puesto, asi que se vigilan todas.")
-	}
-	return b.String(), nil
+	return rows, nil
 }
 
-// statusReport is the round and the session in the few lines that answer "is this alive".
-func statusReport(cfg config.Config, store *session.Store, mutes *watch.Mutes, nextWatch, nextRun time.Time) string {
-	var b strings.Builder
-	b.WriteString("wallapop-manager " + buildVersion + "\n")
-
-	if res, ok := watch.LoadResult(cfg.DataDir); ok {
-		fmt.Fprintf(&b, "\nUltima ronda: %s\n", res.StartedAt.Format("02/01 15:04"))
-		fmt.Fprintf(&b, "  %d busquedas vigiladas, %d ignoradas\n", res.Watched, res.Ignored)
-		fmt.Fprintf(&b, "  %d anuncios mirados, %d nuevos, %d repetidos\n", res.Scanned, len(res.New), res.Duplicates)
-		if res.Error != "" {
-			fmt.Fprintf(&b, "  fallo: %s\n", res.Error)
+func countRows(rows []searchRow) (watched, off, muted int) {
+	for _, row := range rows {
+		switch {
+		case row.Off:
+			off++
+		case row.Muted:
+			muted++
+		default:
+			watched++
 		}
 	}
+	return watched, off, muted
+}
+
+// plainSearches is the terminal answer: everything, queries included, in a fixed width
+// that a terminal honours.
+func plainSearches(rows []searchRow) string {
+	var b strings.Builder
+	for _, row := range rows {
+		mark := "ON  "
+		switch {
+		case row.Off:
+			mark = "off "
+		case row.Muted:
+			mark = "MUTE"
+		}
+		fmt.Fprintf(&b, "%s %-28s %s\n", mark, row.Name, row.Location)
+		fmt.Fprintf(&b, "     %s\n", row.Query)
+	}
+
+	watched, off, muted := countRows(rows)
+	fmt.Fprintf(&b, "\nVigilo %d de %d.", watched, len(rows))
+	if off > 0 {
+		fmt.Fprintf(&b, " %d apagadas en la app.", off)
+	}
+	if muted > 0 {
+		fmt.Fprintf(&b, " %d silenciadas desde el bot.", muted)
+	}
+	return b.String()
+}
+
+// htmlSearches is the phone answer. Telegram draws messages in a proportional font, so a
+// column padded with spaces only lines up inside <pre>; outside it, the same padding is
+// the ragged mess it was before. Queries stay on the terminal, where they are readable.
+func htmlSearches(rows []searchRow) string {
+	watched, off, muted := countRows(rows)
+	if watched+muted == 0 {
+		return fmt.Sprintf("🔎 <b>No vigilo ninguna busqueda</b>\n\n<i>Las %d que tienes guardadas estan apagadas en la app.</i>", off)
+	}
+
+	width := 0
+	for _, row := range rows {
+		if !row.Off && len(row.Name) > width {
+			width = len(row.Name)
+		}
+	}
+	if width > nameColumn {
+		width = nameColumn
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "🔎 <b>Vigilo %d de %d busquedas</b>\n<pre>\n", watched, len(rows))
+	for _, row := range rows {
+		if row.Off {
+			continue
+		}
+		mark := "ON  "
+		if row.Muted {
+			mark = "MUTE"
+		}
+		fmt.Fprintf(&b, "%s  %s  %s\n", mark,
+			telegram.Escape(pad(row.Name, width)), telegram.Escape(row.Location))
+	}
+	b.WriteString("</pre>")
+
+	b.WriteString("<i>")
+	if off > 0 {
+		fmt.Fprintf(&b, "%d apagadas en la app · ", off)
+	}
+	b.WriteString("pulsa para silenciar o devolver</i>")
+	return b.String()
+}
+
+// nameColumn keeps the grid inside the width of a phone: a longer name is cut rather than
+// wrapped, because a wrapped row breaks the columns of every row under it.
+const nameColumn = 20
+
+func pad(s string, width int) string {
+	runes := []rune(s)
+	if len(runes) > width {
+		return string(runes[:width-1]) + "…"
+	}
+	return s + strings.Repeat(" ", width-len(runes))
+}
+
+// htmlRound is what a round looks like when it is read rather than logged: the numbers
+// that changed in bold, the rest as context.
+func htmlRound(res watch.Result) string {
+	if res.Error != "" {
+		return "⚠️ <b>La ronda ha fallado</b>\n" + telegram.Escape(res.Error)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "🔎 <b>Ronda de las %s</b>\n", res.StartedAt.Format("15:04"))
+	fmt.Fprintf(&b, "%d anuncios · <b>%d nuevos</b> · %d repetidos\n", res.Scanned, len(res.New), res.Duplicates)
+
+	fmt.Fprintf(&b, "%d busquedas vigiladas", res.Watched)
+	if res.Silenced > 0 {
+		fmt.Fprintf(&b, ", %d silenciadas", res.Silenced)
+	}
+	if res.Ignored > 0 {
+		fmt.Fprintf(&b, ", %d apagadas", res.Ignored)
+	}
+	if res.Seeded > 0 {
+		fmt.Fprintf(&b, "\n<i>%d apuntados sin avisar: ya estaban ahi</i>", res.Seeded)
+	}
+	for _, f := range res.Failures {
+		fmt.Fprintf(&b, "\n⚠️ %s: %s", telegram.Escape(f.Search), telegram.Escape(f.Error))
+	}
+	return b.String()
+}
+
+// statusReport is the service in the three blocks that answer "is this alive": the round,
+// the catalogue and the session.
+func statusReport(cfg config.Config, store *session.Store, mutes *watch.Mutes, nextWatch, nextRun time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "📊 <b>wallapop-manager</b> <code>%s</code>\n", buildVersion)
+
+	if res, ok := watch.LoadResult(cfg.DataDir); ok {
+		b.WriteString("\n" + htmlRound(res) + "\n")
+	}
 	if !nextWatch.IsZero() {
-		fmt.Fprintf(&b, "Proxima ronda: %s\n", nextWatch.Format("15:04"))
+		fmt.Fprintf(&b, "<i>proxima ronda a las %s</i>\n", nextWatch.Format("15:04"))
 	}
 	if n := mutes.Count(); n > 0 {
-		fmt.Fprintf(&b, "Silenciadas desde el bot: %d\n", n)
+		fmt.Fprintf(&b, "<i>%d silenciadas desde el bot</i>\n", n)
 	}
 
 	if res, ok := reactivate.LoadResult(cfg.DataDir); ok {
-		fmt.Fprintf(&b, "\nCatalogo: %d anuncios, %d caducados, %d reactivados el %s\n",
-			res.Catalogue, res.Expired, len(res.Reactivated), res.StartedAt.Format("02/01"))
+		fmt.Fprintf(&b, "\n♻️ <b>Catalogo</b> · %s\n", res.StartedAt.Format("02/01"))
+		fmt.Fprintf(&b, "%d anuncios · %d caducados · <b>%d reactivados</b>\n",
+			res.Catalogue, res.Expired, len(res.Reactivated))
 	}
 	if !nextRun.IsZero() {
-		fmt.Fprintf(&b, "Proxima pasada: %s\n", nextRun.Format("02/01 15:04"))
+		fmt.Fprintf(&b, "<i>proxima pasada el %s</i>\n", nextRun.Format("02/01 a las 15:04"))
 	}
 
 	if sess := store.Current(); sess != nil {
 		if left, ok := sess.Renewable(); ok {
-			fmt.Fprintf(&b, "\nSesion: %.0f dias antes de importarla a mano", left.Hours()/24)
+			fmt.Fprintf(&b, "\n🔑 <b>Sesion</b> · %.0f dias de margen", left.Hours()/24)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// watchPass reads the saved searches and announces what is new in them. Telegram carries
-// only this: the listings asked for. Everything else the service knows is a metric.
 // watching serialises the rounds: the clock and a command can ask for one at the same
 // time, and two rounds at once would announce the same listing twice.
 var watching sync.Mutex
@@ -458,19 +557,20 @@ func runWatch(ctx context.Context, cfg config.Config, store *session.Store, log 
 type messenger struct{ bot *telegram.Bot }
 
 func (m *messenger) Listing(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error {
-	return m.bot.Photo(ctx, item.Photo(), watch.Line(search.Name(), item, telegram.Escape), muteKeys(search))
+	return m.bot.Photo(ctx, item.Photo(), watch.Line(search.Name(), item, telegram.Escape), listingKeys(search, item))
 }
 
 func (m *messenger) Say(ctx context.Context, text string) error {
 	return m.bot.Text(ctx, telegram.Escape(text), nil)
 }
 
-func muteKeys(search wallapop.SavedSearch) *telegram.Keyboard {
-	return &telegram.Keyboard{Rows: [][]telegram.Button{{{
-		Text:  "🔕 Silenciar " + search.Name(),
-		Data:  buttonMute + search.ID,
-		Style: "danger",
-	}}}}
+// listingKeys puts the two things a listing is for under it: opening it, and hearing less
+// of that search.
+func listingKeys(search wallapop.SavedSearch, item wallapop.SearchItem) *telegram.Keyboard {
+	return &telegram.Keyboard{Rows: [][]telegram.Button{{
+		{Text: "🔗 Ver anuncio", URL: item.URL(), Style: "primary"},
+		{Text: "🔕 Silenciar", Data: buttonMute + search.ID, Style: "danger"},
+	}}}
 }
 
 type printer struct{}
@@ -478,7 +578,9 @@ type printer struct{}
 func (printer) Listing(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error {
 	fmt.Println("---")
 	fmt.Println(watch.Line(search.Name(), item, telegram.Escape))
-	fmt.Println("foto:", item.Photo())
+	// On the phone these two hang from buttons; on a terminal they have to be printed.
+	fmt.Println("enlace:", item.URL())
+	fmt.Println("foto:  ", item.Photo())
 	return nil
 }
 
@@ -674,7 +776,7 @@ func botCommands(cfg config.Config, store *session.Store, log *slog.Logger, list
 			Name: commands.Prefix + "searches",
 			Help: "que busquedas vigilo, y el interruptor de cada una",
 			Run: func(ctx context.Context) (commands.Reply, error) {
-				report, err := searchesReport(ctx, cfg, store, false, mutes)
+				rows, err := searchRows(ctx, cfg, store, mutes)
 				if err != nil {
 					return commands.Reply{}, err
 				}
@@ -682,7 +784,7 @@ func botCommands(cfg config.Config, store *session.Store, log *slog.Logger, list
 				if err != nil {
 					return commands.Reply{}, err
 				}
-				return commands.Reply{Text: report, Keys: searchKeys(values(searches), mutes, cfg.WatchAll)}, nil
+				return commands.Reply{Text: htmlSearches(rows), Keys: searchKeys(values(searches), mutes, cfg.WatchAll)}, nil
 			},
 		},
 		{
@@ -703,7 +805,7 @@ func botCommands(cfg config.Config, store *session.Store, log *slog.Logger, list
 				}
 				defer watching.Unlock()
 				// The new listings announce themselves; this is only the receipt.
-				return commands.Say(runWatch(ctx, cfg, store, log, watch.Options{All: cfg.WatchAll, Mutes: mutes}).Summary()), nil
+				return commands.Say(htmlRound(runWatch(ctx, cfg, store, log, watch.Options{All: cfg.WatchAll, Mutes: mutes}))), nil
 			},
 		},
 	}

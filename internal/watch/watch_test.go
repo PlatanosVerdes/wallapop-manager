@@ -226,7 +226,7 @@ func TestLine(t *testing.T) {
 	item.Location.City = "Barcelona"
 	got := Line("kallax", item, func(s string) string { return strings.ReplaceAll(s, "<", "&lt;") })
 
-	for _, want := range []string{"&lt;barato", "8.780 €", "Barcelona", "kallax", "https://es.wallapop.com/item/slug-a"} {
+	for _, want := range []string{"&lt;barato", "8.780 €", "Barcelona", "kallax"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the message does not carry %q:\n%s", want, got)
 		}
