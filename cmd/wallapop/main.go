@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PlatanosVerdes/wallapop-manager/internal/commands"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/metrics"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
@@ -165,8 +166,9 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		}
 	}()
 
-	// The two jobs keep their own clocks: the catalogue is a daily errand, the searches
-	// are checked on a short random one so the pattern is not a metronome.
+	// The jobs keep their own clocks: the catalogue is a daily errand, the searches are
+	// checked on a short random one so the pattern is not a metronome, and the bot answers
+	// whenever it is asked.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -210,6 +212,22 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		}
 	}()
 
+	if bot := telegram.New(cfg.TelegramToken, cfg.TelegramChat); bot.Enabled() {
+		listener := &commands.Listener{
+			Bot:  bot,
+			Chat: cfg.TelegramChat,
+			Log:  log,
+		}
+		listener.Commands = botCommands(cfg, store, log, listener,
+			func() time.Time { return time.Unix(nextWatch.Load(), 0) },
+			func() time.Time { return time.Unix(next.Load(), 0) })
+		go func() {
+			if err := listener.Serve(ctx); err != nil {
+				log.Error("the bot stopped listening", "err", err)
+			}
+		}()
+	}
+
 	wg.Wait()
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -243,37 +261,97 @@ func cmdWatch(cfg config.Config, store *session.Store, log *slog.Logger, args []
 }
 
 func cmdSearches(cfg config.Config, store *session.Store) error {
-	if _, err := store.Load(); err != nil {
-		return err
-	}
-	searches, err := newClient(cfg, store).SavedSearches(context.Background())
+	report, err := searchesReport(context.Background(), cfg, store, true)
 	if err != nil {
 		return err
 	}
+	fmt.Println(report)
+	return nil
+}
+
+// searchesReport says what is watched and what is not. The long form carries each query,
+// which is worth reading on a terminal and unreadable on a phone.
+func searchesReport(ctx context.Context, cfg config.Config, store *session.Store, long bool) (string, error) {
+	if _, err := store.Load(); err != nil {
+		return "", err
+	}
+	searches, err := newClient(cfg, store).SavedSearches(ctx)
+	if err != nil {
+		return "", err
+	}
 	if len(searches) == 0 {
-		fmt.Println("no saved searches in the account")
-		return nil
+		return "no hay busquedas guardadas en la cuenta", nil
 	}
 
+	var b strings.Builder
+	watched := 0
 	for _, search := range searches {
 		mark := "off"
-		if search.Alert.Enabled {
+		if search.Alert.Enabled || cfg.WatchAll {
 			mark = "ON "
+			watched++
 		}
-		fmt.Printf("%s  %-28s %s\n", mark, search.Name(), search.LocationLabel)
-		fmt.Printf("     %s\n", search.Values().Encode())
+		fmt.Fprintf(&b, "%s  %-28s %s\n", mark, search.Name(), search.LocationLabel)
+		if long {
+			fmt.Fprintf(&b, "     %s\n", search.Values().Encode())
+		}
 	}
-	fmt.Println()
-	fmt.Println("Only the searches marked ON are watched; the switch is the one in the app.")
+	fmt.Fprintf(&b, "\nVigilo %d de %d. El interruptor es el de la app: aqui no se toca ninguna.",
+		watched, len(searches))
 	if cfg.WatchAll {
-		fmt.Println("WALLA_WATCH_ALL is set, so every search above is watched anyway.")
+		b.WriteString("\nWALLA_WATCH_ALL esta puesto, asi que se vigilan todas.")
 	}
-	return nil
+	return b.String(), nil
+}
+
+// statusReport is the round and the session in the few lines that answer "is this alive".
+func statusReport(cfg config.Config, store *session.Store, nextWatch, nextRun time.Time) string {
+	var b strings.Builder
+	b.WriteString("wallapop-manager " + buildVersion + "\n")
+
+	if res, ok := watch.LoadResult(cfg.DataDir); ok {
+		fmt.Fprintf(&b, "\nUltima ronda: %s\n", res.StartedAt.Format("02/01 15:04"))
+		fmt.Fprintf(&b, "  %d busquedas vigiladas, %d ignoradas\n", res.Watched, res.Ignored)
+		fmt.Fprintf(&b, "  %d anuncios mirados, %d nuevos, %d repetidos\n", res.Scanned, len(res.New), res.Duplicates)
+		if res.Error != "" {
+			fmt.Fprintf(&b, "  fallo: %s\n", res.Error)
+		}
+	}
+	if !nextWatch.IsZero() {
+		fmt.Fprintf(&b, "Proxima ronda: %s\n", nextWatch.Format("15:04"))
+	}
+
+	if res, ok := reactivate.LoadResult(cfg.DataDir); ok {
+		fmt.Fprintf(&b, "\nCatalogo: %d anuncios, %d caducados, %d reactivados el %s\n",
+			res.Catalogue, res.Expired, len(res.Reactivated), res.StartedAt.Format("02/01"))
+	}
+	if !nextRun.IsZero() {
+		fmt.Fprintf(&b, "Proxima pasada: %s\n", nextRun.Format("02/01 15:04"))
+	}
+
+	if sess := store.Current(); sess != nil {
+		if left, ok := sess.Renewable(); ok {
+			fmt.Fprintf(&b, "\nSesion: %.0f dias antes de importarla a mano", left.Hours()/24)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // watchPass reads the saved searches and announces what is new in them. Telegram carries
 // only this: the listings asked for. Everything else the service knows is a metric.
+// watching serialises the rounds: the clock and a command can ask for one at the same
+// time, and two rounds at once would announce the same listing twice.
+var watching sync.Mutex
+
+// watchPass waits its turn: the clock would rather run late than not at all.
 func watchPass(ctx context.Context, cfg config.Config, store *session.Store, log *slog.Logger, opt watch.Options) watch.Result {
+	watching.Lock()
+	defer watching.Unlock()
+	return runWatch(ctx, cfg, store, log, opt)
+}
+
+func runWatch(ctx context.Context, cfg config.Config, store *session.Store, log *slog.Logger, opt watch.Options) watch.Result {
+
 	opt.MaxAge = cfg.WatchMaxAge
 	opt.MaxAlerts = cfg.WatchMaxAlerts
 	opt.PhotosPerItem = cfg.WatchPhotos
@@ -423,6 +501,49 @@ func push(ctx context.Context, cfg config.Config, store *session.Store, res reac
 	})
 
 	return metrics.New(cfg.Pushgateway, "wallapop-manager").Push(ctx, gauges)
+}
+
+// botCommands is the table the bot answers from. Names carry the wp_ prefix so another
+// service can share this bot without a clash.
+func botCommands(cfg config.Config, store *session.Store, log *slog.Logger, listener *commands.Listener,
+	nextWatch, nextRun func() time.Time) []commands.Command {
+	table := []commands.Command{
+		{
+			Name: commands.Prefix + "searches",
+			Help: "que busquedas vigilo",
+			Run: func(ctx context.Context) (string, error) {
+				return searchesReport(ctx, cfg, store, false)
+			},
+		},
+		{
+			Name: commands.Prefix + "status",
+			Help: "ultima ronda, proxima y estado de la sesion",
+			Run: func(context.Context) (string, error) {
+				return statusReport(cfg, store, nextWatch(), nextRun()), nil
+			},
+		},
+		{
+			Name: commands.Prefix + "check",
+			Help: "mira las busquedas ahora, sin esperar al reloj",
+			Run: func(ctx context.Context) (string, error) {
+				// A command would rather be told no than queue behind a round that is
+				// already doing the very thing it asked for.
+				if !watching.TryLock() {
+					return "", commands.ErrBusy
+				}
+				defer watching.Unlock()
+				// The new listings announce themselves; this is only the receipt.
+				return runWatch(ctx, cfg, store, log, watch.Options{All: cfg.WatchAll}).Summary(), nil
+			},
+		},
+	}
+	return append(table, commands.Command{
+		Name: commands.Prefix + "help",
+		Help: "esto",
+		Run: func(context.Context) (string, error) {
+			return commands.Help(listener.Commands), nil
+		},
+	})
 }
 
 // pushWatch reports the round the same way: gauges, and the alert rules decide. The

@@ -4,10 +4,12 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,15 +21,28 @@ const api = "https://api.telegram.org/bot"
 const captionLimit = 1024
 
 type Bot struct {
-	Token  string
-	Chat   string
-	HTTP   *http.Client
+	Token string
+	Chat  string
+	HTTP  *http.Client
+	// Poll is a second client for long polling, which holds a request open on purpose and
+	// would trip the timeout of the one used for sending.
+	Poll   *http.Client
 	APIURL string
 }
 
 func New(token, chat string) *Bot {
-	return &Bot{Token: token, Chat: chat, HTTP: &http.Client{Timeout: 20 * time.Second}, APIURL: api}
+	return &Bot{
+		Token:  token,
+		Chat:   chat,
+		HTTP:   &http.Client{Timeout: 20 * time.Second},
+		Poll:   &http.Client{Timeout: 2 * pollSeconds * time.Second},
+		APIURL: api,
+	}
 }
+
+// pollSeconds is how long Telegram holds an empty getUpdates open before answering. One
+// long poll is one request a minute or two, rather than a poll every few seconds.
+const pollSeconds = 30
 
 func (b *Bot) Enabled() bool { return b != nil && b.Token != "" && b.Chat != "" }
 
@@ -89,4 +104,92 @@ func (b *Bot) call(ctx context.Context, method string, form url.Values) error {
 // are written by strangers and arrive full of them.
 func Escape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+// A bot token has exactly one reader: Telegram hands each update to whoever asks first and
+// answers a second caller with 409. So one process owns the updates, and any other service
+// sharing this bot may only send.
+
+type Chat struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+}
+
+type Message struct {
+	Date int64  `json:"date"`
+	Text string `json:"text"`
+	Chat Chat   `json:"chat"`
+}
+
+type Update struct {
+	UpdateID int64    `json:"update_id"`
+	Message  *Message `json:"message"`
+}
+
+// Updates asks for everything after offset, waiting for it. An offset of -1 answers the
+// last update alone, which is how a restart learns where it is without replaying a day of
+// commands.
+func (b *Bot) Updates(ctx context.Context, offset int64) ([]Update, error) {
+	if !b.Enabled() {
+		return nil, nil
+	}
+
+	form := url.Values{
+		"timeout":         {strconv.Itoa(pollSeconds)},
+		"allowed_updates": {`["message"]`},
+	}
+	if offset != 0 {
+		form.Set("offset", strconv.FormatInt(offset, 10))
+	}
+
+	var answer struct {
+		OK     bool     `json:"ok"`
+		Result []Update `json:"result"`
+	}
+	if err := b.get(ctx, "getUpdates", form, &answer); err != nil {
+		return nil, err
+	}
+	return answer.Result, nil
+}
+
+// Command is one entry of the menu Telegram shows next to the text box.
+type Command struct {
+	Name        string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetCommands publishes the menu. The list belongs to the bot, so the process that owns
+// the updates is the one that sets it.
+func (b *Bot) SetCommands(ctx context.Context, commands []Command) error {
+	if !b.Enabled() {
+		return nil
+	}
+	encoded, err := json.Marshal(commands)
+	if err != nil {
+		return err
+	}
+	return b.call(ctx, "setMyCommands", url.Values{"commands": {string(encoded)}})
+}
+
+func (b *Bot) get(ctx context.Context, method string, form url.Values, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		b.APIURL+b.Token+"/"+method+"?"+form.Encode(), nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := b.Poll.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram %s: %w", method, err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("telegram %s answered %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return json.Unmarshal(raw, out)
 }

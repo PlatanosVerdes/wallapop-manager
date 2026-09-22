@@ -95,6 +95,28 @@ are hashed, so a quiet round downloads nothing at all.
 What has been seen lives in `data/seen.json` and is forgotten after `WALLA_SEEN_TTL`.
 The first round of a new search announces nothing: its whole first page was already there.
 
+## The bot
+
+It announces without being asked, and answers four things when it is:
+
+| Command | What it says |
+| :--- | :--- |
+| `/wp_searches` | The saved searches, and which of them are watched |
+| `/wp_status` | The last round, the next one, and how long the session has left |
+| `/wp_check` | Runs a round now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
+| `/wp_help` | The list above, built from the same table the bot dispatches from |
+
+Two rules come from the bot being shared with the other small services on the Pi:
+
+- **One process per bot may read.** Telegram hands each update to whoever asks first and
+  answers a second reader with a 409, so a token has exactly one owner of `getUpdates`.
+  Any other service using this bot may only send. The day a second one wants commands,
+  that owner becomes a router and this service exposes its commands over HTTP instead.
+- **Names carry the `wp_` prefix**, because the command menu belongs to the bot and not to
+  a service. A command that is not ours is somebody else's and gets no answer, and no
+  reply either way goes anywhere but `WALLA_TELEGRAM_CHAT`: a bot is public, and anybody
+  who finds it can write to it.
+
 ## Commands
 
 ```bash
@@ -140,7 +162,7 @@ The watcher:
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
 | `WALLA_TELEGRAM_TOKEN` | – | Bot token. Empty means the watcher runs and announces nothing |
-| `WALLA_TELEGRAM_CHAT` | – | Chat the listings are sent to |
+| `WALLA_TELEGRAM_CHAT` | – | Chat the listings are sent to, and the only one the bot obeys |
 | `WALLA_WATCH_MIN` / `WALLA_WATCH_MAX` | `5m` / `15m` | The round is run after a random wait in this range, so the pattern is not a metronome |
 | `WALLA_WATCH_ALL` | – | `1` watches every saved search instead of only the ones whose alert is on in the app |
 | `WALLA_WATCH_MAX_AGE` | `24h` | A listing older than this is recorded without a message: it was already there |

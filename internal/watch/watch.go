@@ -256,8 +256,9 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	if item.Reserved != nil && item.Reserved.Flag {
 		b.WriteString(" · reservado")
 	}
+	// The bot is shared with the other small services, so the message says who is talking.
 	if search != "" {
-		fmt.Fprintf(&b, "\n🔎 %s", escape(search))
+		fmt.Fprintf(&b, "\n🔎 wallapop · %s", escape(search))
 	}
 	fmt.Fprintf(&b, "\n%s", item.URL())
 	return b.String()
