@@ -54,6 +54,12 @@ type Listener struct {
 	Log      *slog.Logger
 	// Backoff is the wait after a failed poll.
 	Backoff time.Duration
+	// StaleAfter is how old a message may be and still be acted on. It exists for the
+	// restart: the queue handed over on the first read holds whatever was sent while the
+	// process was down, and this service is redeployed often enough that a command sent
+	// seconds before a restart is one the sender is still waiting for, while one sent
+	// this morning is not.
+	StaleAfter time.Duration
 }
 
 // Serve reads updates until the context is done. It is the only place in the service that
@@ -65,15 +71,18 @@ func (l *Listener) Serve(ctx context.Context) error {
 	if l.Backoff == 0 {
 		l.Backoff = 10 * time.Second
 	}
+	if l.StaleAfter == 0 {
+		l.StaleAfter = 2 * time.Minute
+	}
 
 	if err := l.Bot.SetCommands(ctx, l.menu()); err != nil {
 		l.Log.Warn("could not publish the command menu", "err", err)
 	}
 
-	// Start from the last update rather than from whatever is queued: a restart must not
-	// replay this morning's commands. The first read is only there to learn where the
-	// queue ends, so nothing in it is run.
-	offset, bootstrap := int64(-1), true
+	// Start from the last update rather than from whatever is queued, and judge what comes
+	// back by its age: a command sent seconds before a restart still deserves an answer,
+	// one sent this morning does not.
+	offset, first := int64(-1), true
 	for {
 		updates, err := l.Bot.Updates(ctx, offset)
 		if err != nil {
@@ -91,17 +100,21 @@ func (l *Listener) Serve(ctx context.Context) error {
 
 		for _, update := range updates {
 			offset = update.UpdateID + 1
-			if bootstrap {
-				continue
-			}
 			switch {
 			case update.CallbackQuery != nil:
+				// A press carries no time of its own, so an old one cannot be told from a
+				// recent one. The queue found on the first read is left alone rather than
+				// silencing a search hours after somebody asked: a press lost to a
+				// restart is pressed again, and the button shows which way it went.
+				if first {
+					continue
+				}
 				l.press(ctx, *update.CallbackQuery)
 			case update.Message != nil:
 				l.handle(ctx, *update.Message)
 			}
 		}
-		bootstrap = false
+		first = false
 	}
 }
 
@@ -123,11 +136,21 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 	if name == "" {
 		return
 	}
+	// The lag is worth a number: what is felt as a slow bot is usually a command sent
+	// while the container was being replaced.
+	lag := time.Duration(0)
+	if msg.Date > 0 {
+		lag = time.Since(time.Unix(msg.Date, 0)).Round(time.Second)
+		if lag > l.StaleAfter {
+			l.Log.Info("stale command dropped", "name", name, "lag", lag)
+			return
+		}
+	}
 	for _, cmd := range l.Commands {
 		if cmd.Name != name {
 			continue
 		}
-		l.Log.Info("command", "name", name)
+		l.Log.Info("command", "name", name, "lag", lag)
 		reply, err := cmd.Run(ctx)
 		if err != nil {
 			reply = Reply{Text: "⚠️ no ha podido ser: " + telegram.Escape(err.Error())}

@@ -191,12 +191,15 @@ func TestHelpIsBuiltFromTheTable(t *testing.T) {
 	}
 }
 
-// The first read answers whatever was queued before the process started, which on a
-// restart is this morning's command. Running it would act on a message nobody sent again.
+// Telegram keeps updates for 24 hours, so the first read after a long stop hands over
+// commands nobody is waiting for any more.
 func TestNothingIsReplayedAfterARestart(t *testing.T) {
 	fake := &telegramFake{
 		serveOn: 1,
-		updates: []telegram.Update{message(9, 1308329178, "/wp_check")},
+		updates: []telegram.Update{{UpdateID: 9, Message: &telegram.Message{
+			Text: "/wp_check", Date: time.Now().Add(-24 * time.Hour).Unix(),
+			Chat: telegram.Chat{ID: 1308329178},
+		}}},
 	}
 	var ran int
 	sent := listen(t, fake, []Command{
@@ -291,5 +294,78 @@ func TestButtonFromAnotherChatIsIgnored(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.edited) != 0 {
 		t.Fatalf("something was redrawn for a stranger: %v", fake.edited)
+	}
+}
+
+// A command sent seconds before a restart is one its sender is still waiting for, so the
+// queue handed over on the first read is judged by age and not thrown away whole.
+func TestFreshCommandQueuedDuringARestartIsRun(t *testing.T) {
+	fake := &telegramFake{serveOn: 1, updates: []telegram.Update{
+		{UpdateID: 9, Message: &telegram.Message{
+			Text: "/wp_check", Date: time.Now().Add(-5 * time.Second).Unix(),
+			Chat: telegram.Chat{ID: 1308329178},
+		}},
+	}}
+	var ran int
+	sent := listen(t, fake, []Command{
+		{Name: "wp_check", Run: func(context.Context) (Reply, error) { ran++; return Say("hecho"), nil }},
+	})
+	if ran != 1 || len(sent) != 1 {
+		t.Fatalf("a command sent five seconds ago was dropped: ran %d, sent %v", ran, sent)
+	}
+}
+
+func TestStaleCommandIsDropped(t *testing.T) {
+	fake := &telegramFake{serveOn: 1, updates: []telegram.Update{
+		{UpdateID: 9, Message: &telegram.Message{
+			Text: "/wp_check", Date: time.Now().Add(-6 * time.Hour).Unix(),
+			Chat: telegram.Chat{ID: 1308329178},
+		}},
+	}}
+	var ran int
+	sent := listen(t, fake, []Command{
+		{Name: "wp_check", Run: func(context.Context) (Reply, error) { ran++; return Say("hecho"), nil }},
+	})
+	if ran != 0 || len(sent) != 0 {
+		t.Fatalf("this morning's command was replayed: ran %d, sent %v", ran, sent)
+	}
+}
+
+// A press has no time of its own, so the queue found on the first read is left alone.
+func TestQueuedPressIsNotReplayed(t *testing.T) {
+	fake := &telegramFake{serveOn: 1, updates: []telegram.Update{{
+		UpdateID: 9,
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:      "q1",
+			Data:    DataPrefix + "t:whatever",
+			Message: &telegram.Message{MessageID: 5, Chat: telegram.Chat{ID: 1308329178}},
+		},
+	}}}
+	fake.served = make(chan struct{})
+
+	var ran bool
+	listener := &Listener{
+		Bot:  fake.server(t),
+		Chat: "1308329178",
+		Log:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnButton: func(context.Context, string) (string, *telegram.Keyboard, error) {
+			ran = true
+			return "silenciada", nil, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = listener.Serve(ctx); close(done) }()
+	select {
+	case <-fake.served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the listener never got going")
+	}
+	cancel()
+	<-done
+
+	if ran {
+		t.Fatal("a press queued before the restart was acted on")
 	}
 }

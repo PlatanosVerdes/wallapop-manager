@@ -120,6 +120,13 @@ Wallapop: the alert switch in the app stays where its owner left it, and a silen
 is simply one this has nothing to say about for now. So the app can have a search on while
 the bot is quiet about it, and turning it back on here changes nothing over there.
 
+A command sent while the container is being replaced is not lost: the queue handed over on
+the first read is judged by the age of each message, and anything sent within two minutes
+still gets its answer. A press has no time of its own, so the queue's presses are left
+alone instead: one lost to a restart is pressed again, and the button shows which way it
+went. The log carries the lag of every command, because a bot that feels slow is usually a
+command that arrived during a deploy.
+
 A button press is a `callback_query`, which is only delivered when `allowed_updates` asks
 for it, carries at most 64 bytes of `callback_data` (a saved search id is a 36 character
 uuid, so the verb in front of it has to be short), and must be answered with

@@ -399,11 +399,13 @@ func htmlSearches(rows []searchRow) string {
 		if row.Off {
 			continue
 		}
-		mark := "ON  "
+		// One emoji per row, so whatever width the font gives it, every row is pushed by
+		// the same amount and the columns still line up.
+		bell := "🔔"
 		if row.Muted {
-			mark = "MUTE"
+			bell = "🔕"
 		}
-		fmt.Fprintf(&b, "%s  %s  %s\n", mark,
+		fmt.Fprintf(&b, "%s  %s  %s\n", bell,
 			telegram.Escape(pad(row.Name, width)), telegram.Escape(row.Location))
 	}
 	b.WriteString("</pre>")
