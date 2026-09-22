@@ -17,7 +17,7 @@ func TestPushWritesTheExpositionFormat(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := New(srv.URL+"/", "wallapop-reactivator").Push(context.Background(), []Gauge{
+	err := New(srv.URL+"/", "wallapop-manager").Push(context.Background(), []Gauge{
 		{Name: "wallapop_last_run_status", Help: "0 fine", Value: 0},
 		{Name: "wallapop_session_days_remaining", Help: "days", Value: 29.5},
 	})
@@ -27,7 +27,7 @@ func TestPushWritesTheExpositionFormat(t *testing.T) {
 	if method != http.MethodPut {
 		t.Errorf("pushed with %s, expected PUT so the group is replaced", method)
 	}
-	if path != "/metrics/job/wallapop-reactivator" {
+	if path != "/metrics/job/wallapop-manager" {
 		t.Errorf("pushed to %s", path)
 	}
 	for _, want := range []string{

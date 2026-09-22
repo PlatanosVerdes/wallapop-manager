@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/reactivate"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/session"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
 )
 
 func get(t *testing.T, h *Health) (int, map[string]any) {

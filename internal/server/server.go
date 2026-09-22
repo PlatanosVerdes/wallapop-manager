@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/reactivate"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/session"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/watch"
 )
 
 type Health struct {
@@ -17,6 +18,7 @@ type Health struct {
 	Store      *session.Store
 	WarnBefore time.Duration
 	NextRun    func() time.Time
+	NextWatch  func() time.Time
 }
 
 type payload struct {
@@ -28,6 +30,8 @@ type payload struct {
 	RenewableDays *float64           `json:"renewable_days_left,omitempty"`
 	NextRun       string             `json:"next_run,omitempty"`
 	LastRun       *reactivate.Result `json:"last_run,omitempty"`
+	NextWatch     string             `json:"next_watch,omitempty"`
+	LastWatch     *watch.Result      `json:"last_watch,omitempty"`
 }
 
 func (h *Health) Handler() http.Handler {
@@ -75,9 +79,22 @@ func (h *Health) Handler() http.Handler {
 				body.Status = "warn"
 			}
 		}
+		// The watcher is reported but does not decide the status: a search that failed is
+		// tried again in minutes and is nobody's emergency.
+		if res, ok := watch.LoadResult(h.DataDir); ok {
+			body.LastWatch = &res
+			if res.NeedsHuman && body.Status == "ok" {
+				down("the last round of searches needs a human: " + res.Error)
+			}
+		}
 		if h.NextRun != nil {
 			if next := h.NextRun(); !next.IsZero() {
 				body.NextRun = next.Format(time.RFC3339)
+			}
+		}
+		if h.NextWatch != nil {
+			if next := h.NextWatch(); !next.IsZero() {
+				body.NextWatch = next.Format(time.RFC3339)
 			}
 		}
 

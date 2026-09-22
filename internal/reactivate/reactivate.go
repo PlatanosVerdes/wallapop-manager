@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/wallapop"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
 type Options struct {

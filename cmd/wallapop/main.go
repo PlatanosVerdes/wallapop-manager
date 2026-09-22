@@ -12,21 +12,24 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/config"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/metrics"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/reactivate"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/server"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/session"
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/wallapop"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/metrics"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/server"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/watch"
 )
 
 var buildVersion = "local"
 
-const usage = `wallapop-reactivator ` + "%s" + `
+const usage = `wallapop-manager ` + "%s" + `
 
   run [--dry-run]        one pass: reactivate everything expired
   serve [--port] [--interval]
@@ -67,6 +70,10 @@ func run(args []string) error {
 	switch args[0] {
 	case "run":
 		return cmdRun(cfg, store, log, args[1:])
+	case "watch":
+		return cmdWatch(cfg, store, log, args[1:])
+	case "searches":
+		return cmdSearches(cfg, store)
 	case "serve":
 		return cmdServe(cfg, store, log, args[1:])
 	case "session":
@@ -125,7 +132,7 @@ func cmdRun(cfg config.Config, store *session.Store, log *slog.Logger, args []st
 func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	port := fs.Int("port", cfg.Port, "port for /healthz")
-	interval := fs.Duration("interval", cfg.Interval, "time between passes")
+	interval := fs.Duration("interval", cfg.Interval, "time between reactivation passes")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -133,15 +140,17 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Written by the loop below and read by the health handler, so it crosses goroutines.
-	var next atomic.Int64
+	// Written by the loops and read by the health handler, so they cross goroutines.
+	var next, nextWatch atomic.Int64
 	next.Store(time.Now().Unix())
+	nextWatch.Store(time.Now().Unix())
 	health := &server.Health{
 		Version:    buildVersion,
 		DataDir:    cfg.DataDir,
 		Store:      store,
 		WarnBefore: cfg.WarnBefore,
 		NextRun:    func() time.Time { return time.Unix(next.Load(), 0) },
+		NextWatch:  func() time.Time { return time.Unix(nextWatch.Load(), 0) },
 	}
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(*port),
@@ -156,26 +165,190 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		}
 	}()
 
-	for {
-		res := onePass(ctx, cfg, store, log, false)
+	// The two jobs keep their own clocks: the catalogue is a daily errand, the searches
+	// are checked on a short random one so the pattern is not a metronome.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for {
+			res := onePass(ctx, cfg, store, log, false)
 
-		// A pass that failed is retried on a short clock: a session imported by hand
-		// should take effect in minutes, not on tomorrow's tick.
-		wait := *interval
-		if !res.OK() {
-			wait = cfg.RetryEvery
+			// A pass that failed is retried on a short clock: a session imported by hand
+			// should take effect in minutes, not on tomorrow's tick.
+			wait := *interval
+			if !res.OK() {
+				wait = cfg.RetryEvery
+			}
+			at := time.Now().Add(wait)
+			next.Store(at.Unix())
+			log.Info("next pass", "at", at.Format(time.RFC3339), "after_failure", !res.OK())
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
 		}
-		at := time.Now().Add(wait)
-		next.Store(at.Unix())
-		log.Info("next pass", "at", at.Format(time.RFC3339), "after_failure", !res.OK())
-		select {
-		case <-ctx.Done():
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			return srv.Shutdown(shutdown)
-		case <-time.After(wait):
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			res := watchPass(ctx, cfg, store, log, watch.Options{All: cfg.WatchAll})
+
+			wait := watch.Interval(cfg.WatchMin, cfg.WatchMax)
+			if !res.OK() {
+				wait = maxDuration(wait, cfg.RetryEvery)
+			}
+			at := time.Now().Add(wait)
+			nextWatch.Store(at.Unix())
+			log.Info("next watch", "at", at.Format(time.RFC3339), "new", len(res.New))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+
+	wg.Wait()
+	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdown)
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func cmdWatch(cfg config.Config, store *session.Store, log *slog.Logger, args []string) error {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	dryRun := fs.Bool("dry-run", false, "say what would be announced without sending anything")
+	all := fs.Bool("all", cfg.WatchAll, "watch every saved search, not only the ones with the alert on")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	res := watchPass(ctx, cfg, store, log, watch.Options{DryRun: *dryRun, All: *all})
+	fmt.Println(res.Summary())
+	if !res.OK() {
+		return errors.New("the round did not finish clean")
+	}
+	return nil
+}
+
+func cmdSearches(cfg config.Config, store *session.Store) error {
+	if _, err := store.Load(); err != nil {
+		return err
+	}
+	searches, err := newClient(cfg, store).SavedSearches(context.Background())
+	if err != nil {
+		return err
+	}
+	if len(searches) == 0 {
+		fmt.Println("no saved searches in the account")
+		return nil
+	}
+
+	for _, search := range searches {
+		mark := "off"
+		if search.Alert.Enabled {
+			mark = "ON "
+		}
+		fmt.Printf("%s  %-28s %s\n", mark, search.Name(), search.LocationLabel)
+		fmt.Printf("     %s\n", search.Values().Encode())
+	}
+	fmt.Println()
+	fmt.Println("Only the searches marked ON are watched; the switch is the one in the app.")
+	if cfg.WatchAll {
+		fmt.Println("WALLA_WATCH_ALL is set, so every search above is watched anyway.")
+	}
+	return nil
+}
+
+// watchPass reads the saved searches and announces what is new in them. Telegram carries
+// only this: the listings asked for. Everything else the service knows is a metric.
+func watchPass(ctx context.Context, cfg config.Config, store *session.Store, log *slog.Logger, opt watch.Options) watch.Result {
+	opt.MaxAge = cfg.WatchMaxAge
+	opt.MaxAlerts = cfg.WatchMaxAlerts
+	opt.PhotosPerItem = cfg.WatchPhotos
+	opt.SeenTTL = cfg.SeenTTL
+	opt.MinPause = cfg.WatchMinPause
+	opt.MaxPause = cfg.WatchMaxPause
+
+	report := func(res watch.Result) watch.Result {
+		if opt.DryRun {
+			return res
+		}
+		if err := watch.SaveResult(cfg.DataDir, res); err != nil {
+			log.Error("could not save the round", "err", err)
+		}
+		if err := pushWatch(ctx, cfg, res); err != nil {
+			log.Error("could not push watch metrics", "err", err)
+		}
+		return res
+	}
+
+	if _, err := store.Load(); err != nil {
+		log.Error("no usable session", "err", err)
+		return report(watch.Result{StartedAt: time.Now(), Error: err.Error(), NeedsHuman: true})
+	}
+	seen, err := watch.LoadSeen(cfg.DataDir)
+	if err != nil {
+		log.Error("could not read what has been seen", "err", err)
+		return report(watch.Result{StartedAt: time.Now(), Error: err.Error()})
+	}
+
+	client := newClient(cfg, store)
+	if store.AccessSpent() {
+		if err := client.RenewSession(ctx); err != nil {
+			log.Error("the session could not be renewed", "err", err)
+			return report(watch.Result{StartedAt: time.Now(), Error: err.Error(), NeedsHuman: true})
 		}
 	}
+
+	var notify watch.Notifier
+	switch bot := telegram.New(cfg.TelegramToken, cfg.TelegramChat); {
+	case opt.DryRun:
+		// The dry run prints the message it would have sent, markup and all.
+		notify = &printer{}
+	case bot.Enabled():
+		notify = &messenger{bot: bot}
+	default:
+		log.Warn("no telegram configured, so nothing will be announced")
+	}
+	return report(watch.Run(ctx, client, seen, notify, opt, log))
+}
+
+// messenger turns a listing into the message that reaches the phone.
+type messenger struct{ bot *telegram.Bot }
+
+func (m *messenger) Listing(ctx context.Context, search string, item wallapop.SearchItem) error {
+	return m.bot.Photo(ctx, item.Photo(), watch.Line(search, item, telegram.Escape))
+}
+
+func (m *messenger) Say(ctx context.Context, text string) error {
+	return m.bot.Text(ctx, telegram.Escape(text))
+}
+
+type printer struct{}
+
+func (printer) Listing(_ context.Context, search string, item wallapop.SearchItem) error {
+	fmt.Println("---")
+	fmt.Println(watch.Line(search, item, telegram.Escape))
+	fmt.Println("foto:", item.Photo())
+	return nil
+}
+
+func (printer) Say(_ context.Context, text string) error {
+	fmt.Println("---")
+	fmt.Println(text)
+	return nil
 }
 
 // onePass renews the session, does the round, and reports state. It never sends a message
@@ -249,7 +422,28 @@ func push(ctx context.Context, cfg config.Config, store *session.Store, res reac
 		Value: days,
 	})
 
-	return metrics.New(cfg.Pushgateway, "wallapop-reactivator").Push(ctx, gauges)
+	return metrics.New(cfg.Pushgateway, "wallapop-manager").Push(ctx, gauges)
+}
+
+// pushWatch reports the round the same way: gauges, and the alert rules decide. The
+// listings themselves are not metrics, only how many there were.
+func pushWatch(ctx context.Context, cfg config.Config, res watch.Result) error {
+	status := 0.0
+	switch {
+	case res.NeedsHuman:
+		status = 2
+	case !res.OK():
+		status = 1
+	}
+
+	return metrics.New(cfg.Pushgateway, "wallapop-watch").Push(ctx, []metrics.Gauge{
+		{Name: "wallapop_watch_status", Help: "0 fine, 1 failed, 2 needs a human", Value: status},
+		{Name: "wallapop_watch_timestamp", Help: "Unix time of the last round of searches", Value: float64(time.Now().Unix())},
+		{Name: "wallapop_watch_searches", Help: "Saved searches watched in the last round", Value: float64(res.Watched)},
+		{Name: "wallapop_watch_scanned", Help: "Listings read in the last round", Value: float64(res.Scanned)},
+		{Name: "wallapop_watch_new", Help: "Listings announced in the last round", Value: float64(len(res.New))},
+		{Name: "wallapop_watch_duplicates", Help: "Listings dropped as a copy of one already seen", Value: float64(res.Duplicates)},
+	})
 }
 
 func cmdSession(cfg config.Config, store *session.Store, args []string) error {

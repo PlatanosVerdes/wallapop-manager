@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/PlatanosVerdes/wallapop-reactivator/internal/wallapop"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
 type Config struct {
@@ -33,6 +33,21 @@ type Config struct {
 	Pushgateway string
 	WarnBefore  time.Duration
 
+	// The watcher: the saved searches, and what it is allowed to say.
+	TelegramToken string
+	TelegramChat  string
+	WatchMin      time.Duration
+	WatchMax      time.Duration
+	// WatchAll follows every saved search instead of only the ones whose alert is on in
+	// the app.
+	WatchAll       bool
+	WatchMaxAge    time.Duration
+	WatchMaxAlerts int
+	WatchPhotos    int
+	WatchMinPause  time.Duration
+	WatchMaxPause  time.Duration
+	SeenTTL        time.Duration
+
 	LogJSON bool
 }
 
@@ -52,7 +67,20 @@ func Load() (Config, error) {
 		MaxPerRun:   number("WALLA_MAX_PER_RUN", 25),
 		Pushgateway: env("WALLA_PUSHGATEWAY", ""),
 		WarnBefore:  duration("WALLA_WARN_BEFORE", 72*time.Hour),
-		LogJSON:     env("WALLA_LOG_JSON", "") == "1",
+
+		TelegramToken:  env("WALLA_TELEGRAM_TOKEN", ""),
+		TelegramChat:   env("WALLA_TELEGRAM_CHAT", ""),
+		WatchMin:       duration("WALLA_WATCH_MIN", 5*time.Minute),
+		WatchMax:       duration("WALLA_WATCH_MAX", 15*time.Minute),
+		WatchAll:       env("WALLA_WATCH_ALL", "") == "1",
+		WatchMaxAge:    duration("WALLA_WATCH_MAX_AGE", 24*time.Hour),
+		WatchMaxAlerts: number("WALLA_WATCH_MAX_ALERTS", 10),
+		WatchPhotos:    number("WALLA_WATCH_PHOTOS", 2),
+		WatchMinPause:  duration("WALLA_WATCH_MIN_PAUSE", 3*time.Second),
+		WatchMaxPause:  duration("WALLA_WATCH_MAX_PAUSE", 15*time.Second),
+		SeenTTL:        duration("WALLA_SEEN_TTL", 30*24*time.Hour),
+
+		LogJSON: env("WALLA_LOG_JSON", "") == "1",
 	}
 
 	// A wait of zero would turn the ticker into a spin loop, which is exactly what an
@@ -65,6 +93,15 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxPause < cfg.MinPause {
 		return cfg, fmt.Errorf("WALLA_MAX_PAUSE (%s) is below WALLA_MIN_PAUSE (%s)", cfg.MaxPause, cfg.MinPause)
+	}
+	if cfg.WatchMin < time.Minute {
+		return cfg, fmt.Errorf("WALLA_WATCH_MIN (%s) is under a minute, which would spin", cfg.WatchMin)
+	}
+	if cfg.WatchMax < cfg.WatchMin {
+		return cfg, fmt.Errorf("WALLA_WATCH_MAX (%s) is below WALLA_WATCH_MIN (%s)", cfg.WatchMax, cfg.WatchMin)
+	}
+	if cfg.WatchMaxPause < cfg.WatchMinPause {
+		return cfg, fmt.Errorf("WALLA_WATCH_MAX_PAUSE (%s) is below WALLA_WATCH_MIN_PAUSE (%s)", cfg.WatchMaxPause, cfg.WatchMinPause)
 	}
 	if !wallapop.ValidScheme(cfg.Scheme) {
 		return cfg, fmt.Errorf("WALLA_SIGN_SCHEME %q is not one of none, pipe, legacy", cfg.Scheme)
@@ -79,6 +116,12 @@ func Load() (Config, error) {
 	}
 	if v := os.Getenv("WALLA_REACTIVATE_METHOD"); v != "" {
 		wallapop.ReactivateMethod = v
+	}
+	if v := os.Getenv("WALLA_PATH_SEARCH"); v != "" {
+		wallapop.PathSearch = v
+	}
+	if v := os.Getenv("WALLA_PATH_SAVED_SEARCHES"); v != "" {
+		wallapop.PathSavedSearches = v
 	}
 
 	return cfg, nil

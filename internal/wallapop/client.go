@@ -95,14 +95,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		}
 	}
 
-	header, err := c.attempt(ctx, method, path, query, encoded, out)
+	header, err := c.attempt(ctx, method, path, query, encoded, out, true)
 	if !errors.Is(err, ErrAccessExpired) {
 		return header, err
 	}
 	if err := c.RenewSession(ctx); err != nil {
 		return header, err
 	}
-	header, err = c.attempt(ctx, method, path, query, encoded, out)
+	header, err = c.attempt(ctx, method, path, query, encoded, out, true)
 	if errors.Is(err, ErrAccessExpired) {
 		// Renewed and still rejected: the session is not coming back on its own.
 		return header, fmt.Errorf("%w: rejected right after a renewal", ErrUnauthorized)
@@ -110,7 +110,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	return header, err
 }
 
-func (c *Client) attempt(ctx context.Context, method, path string, query url.Values, body []byte, out any) (http.Header, error) {
+// public calls an endpoint that needs no session, and deliberately sends no bearer: the
+// catalogue search works anonymously, so watching it is not traffic tied to the account.
+func (c *Client) public(ctx context.Context, path string, query url.Values, out any) error {
+	_, err := c.attempt(ctx, "GET", path, query, nil, out, false)
+	return err
+}
+
+func (c *Client) attempt(ctx context.Context, method, path string, query url.Values, body []byte, out any, auth bool) (http.Header, error) {
 	var payload io.Reader
 	if body != nil {
 		payload = bytes.NewReader(body)
@@ -126,7 +133,13 @@ func (c *Client) attempt(ctx context.Context, method, path string, query url.Val
 	}
 
 	c.setCommonHeaders(req)
-	req.Header.Set("Authorization", "Bearer "+c.Session.AccessToken())
+	if auth {
+		req.Header.Set("Authorization", "Bearer "+c.Session.AccessToken())
+	} else {
+		// The device id is the browser the session was born in; an anonymous call that
+		// carried it would still be traceable back to the account.
+		req.Header.Del("X-DeviceId")
+	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
