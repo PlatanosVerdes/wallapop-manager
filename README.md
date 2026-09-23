@@ -100,7 +100,7 @@ wallapop session show | refresh         # check the session
 | `WALLA_TELEGRAM_TOKEN` | – | Bot token |
 | `WALLA_TELEGRAM_CHAT` | – | Owner's chat |
 | `WALLA_MAX_USERS` | `20` | Chats that can join |
-| `WALLA_MAX_SEARCHES` | `3` | Searches per chat |
+| `WALLA_MAX_SEARCHES` | `10` | Searches per chat |
 | `WALLA_WATCH_MIN` / `MAX` | `5m` / `15m` | Wait between rounds |
 | `WALLA_WATCH_MIN_PAUSE` / `MAX_PAUSE` | `3s` / `15s` | Pause between requests |
 | `WALLA_SEARCH_PAGES` | `3` | Pages on a deep round |

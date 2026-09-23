@@ -76,7 +76,7 @@ func Load() (Config, error) {
 
 		TelegramToken:  env("WALLA_TELEGRAM_TOKEN", ""),
 		TelegramChat:   env("WALLA_TELEGRAM_CHAT", ""),
-		MaxSearches:    number("WALLA_MAX_SEARCHES", 3),
+		MaxSearches:    number("WALLA_MAX_SEARCHES", 10),
 		MaxUsers:       number("WALLA_MAX_USERS", 20),
 		WatchMin:       duration("WALLA_WATCH_MIN", 5*time.Minute),
 		WatchMax:       duration("WALLA_WATCH_MAX", 15*time.Minute),

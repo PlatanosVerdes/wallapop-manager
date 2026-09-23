@@ -143,7 +143,7 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 			Help: "Ver y editar tus búsquedas",
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
 				user, _ := b.people.Get(req.ChatID())
-				return commands.Reply{Text: searchesText(user, b.cfg.MaxSearches), Keys: searchKeys(user)}, nil
+				return commands.Reply{Text: searchesText(user), Keys: searchKeys(user)}, nil
 			},
 		},
 		{
@@ -288,7 +288,7 @@ func (b *botState) near(chat string, at telegram.Location) (commands.Reply, erro
 	if err != nil {
 		return commands.Reply{}, err
 	}
-	return b.saved(chat, "📍 Ahora cerca de ti", search), nil
+	return saved("📍 Ahora cerca de ti", search), nil
 }
 
 func (b *botState) rename(chat, id, name string) (commands.Reply, error) {
@@ -311,16 +311,15 @@ func (b *botState) add(ctx context.Context, chat, address, name string) (command
 	if err != nil {
 		return commands.Reply{}, err
 	}
-	return b.saved(chat, "✅ Guardada", search), nil
+	return saved("✅ Guardada", search), nil
 }
 
-func (b *botState) saved(chat, title string, search users.Search) commands.Reply {
-	user, _ := b.people.Get(chat)
+func saved(title string, search users.Search) commands.Reply {
 	query := search.Values()
 	var t strings.Builder
 	fmt.Fprintf(&t, "%s <b>%s</b>\n", title, telegram.Escape(search.Name))
 	describe(&t, search.Place, query)
-	fmt.Fprintf(&t, "\n<i>Te aviso de lo nuevo a partir de ahora (%d/%d)</i>", len(user.Searches), b.cfg.MaxSearches)
+	t.WriteString("\n<i>Te aviso de lo nuevo a partir de ahora</i>")
 	if wallapop.RadiusKm(query) == "" {
 		t.WriteString("\n<i>¿Solo cerca de ti? Mándame tu ubicación 📎</i>")
 	}
@@ -550,7 +549,7 @@ func searchKeys(user users.User) *telegram.Keyboard {
 	return keys
 }
 
-func searchesText(user users.User, limit int) string {
+func searchesText(user users.User) string {
 	if len(user.Searches) == 0 {
 		return "🔎 <b>Aún no tienes búsquedas</b>\n\n" + howToAdd
 	}
@@ -561,7 +560,7 @@ func searchesText(user users.User, limit int) string {
 		}
 	}
 	var t strings.Builder
-	fmt.Fprintf(&t, "🔎 <b>Tus búsquedas</b> (%d/%d)", len(user.Searches), limit)
+	t.WriteString("🔎 <b>Tus búsquedas</b>")
 	if muted > 0 {
 		fmt.Fprintf(&t, " · %d silenciadas", muted)
 	}
