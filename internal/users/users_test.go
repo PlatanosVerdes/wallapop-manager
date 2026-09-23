@@ -87,3 +87,30 @@ func TestSearchesOfOneChatAreNotAnother(t *testing.T) {
 		t.Fatalf("one chat silenced another's search: %v", err)
 	}
 }
+
+// The terminal adds searches to the same file while the service runs: the service has to
+// see them, and must not save over them.
+func TestAnotherWriterIsNotLost(t *testing.T) {
+	dir := t.TempDir()
+	service, _ := Load(dir)
+	now := time.Now()
+	_, _ = service.Request("1", "Ana", true, now)
+
+	terminal, _ := Load(dir)
+	// Filesystems with coarse timestamps would make both writes look the same age.
+	time.Sleep(20 * time.Millisecond)
+	if _, err := terminal.Add("1", "motos", url.Values{"brand": {"Yamaha"}}, 3, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if user, _ := service.Get("1"); len(user.Searches) != 1 {
+		t.Fatalf("the service does not see the search the terminal added: %+v", user)
+	}
+	if _, err := service.Add("1", "kallax", url.Values{"keywords": {"kallax"}}, 3, now); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := Load(dir)
+	if user, _ := again.Get("1"); len(user.Searches) != 2 {
+		t.Fatalf("a write from the service lost the terminal's: %+v", user.Searches)
+	}
+}

@@ -51,30 +51,58 @@ type Store struct {
 	mu    sync.Mutex
 	path  string
 	users map[string]*User
+	// read is when the file last read or written was modified. The terminal writes the
+	// same file while the service runs, and a store that never looked again would save
+	// over it.
+	read time.Time
 }
 
 func Load(dir string) (*Store, error) {
 	store := &Store{path: filepath.Join(dir, "users.json"), users: map[string]*User{}}
-	raw, err := os.ReadFile(store.path)
-	if os.IsNotExist(err) {
-		return store, nil
-	}
-	if err != nil {
+	if err := store.refresh(); err != nil {
 		return nil, err
-	}
-	var list []*User
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("%s: %w", store.path, err)
-	}
-	for _, user := range list {
-		store.users[user.Chat] = user
 	}
 	return store, nil
 }
 
+// refresh reads the file again when somebody else has written it since. Callers hold mu.
+func (s *Store) refresh() error {
+	info, err := os.Stat(s.path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.ModTime().Equal(s.read) {
+		return nil
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return err
+	}
+	var list []*User
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return fmt.Errorf("%s: %w", s.path, err)
+	}
+	s.users = make(map[string]*User, len(list))
+	for _, user := range list {
+		s.users[user.Chat] = user
+	}
+	s.read = info.ModTime()
+	return nil
+}
+
+// lock takes the store and brings it up to date with the file. A file that cannot be read
+// leaves what was in memory, which is the last state this process knew to be good.
+func (s *Store) lock() error {
+	s.mu.Lock()
+	return s.refresh()
+}
+
 // Get answers a copy, so a round can walk a user's searches while a button edits them.
 func (s *Store) Get(chat string) (User, bool) {
-	s.mu.Lock()
+	_ = s.lock()
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok {
@@ -90,7 +118,7 @@ func (s *Store) IsActive(chat string) bool {
 
 // All answers every user, active or waiting, ordered by the time they arrived.
 func (s *Store) All() []User {
-	s.mu.Lock()
+	_ = s.lock()
 	defer s.mu.Unlock()
 	out := make([]User, 0, len(s.users))
 	for _, user := range s.users {
@@ -113,7 +141,10 @@ func (s *Store) Active() []User {
 // Request records somebody asking to join. It reports false when the chat was already
 // known, so a second /start does not bother the owner again.
 func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, error) {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return false, err
+	}
 	defer s.mu.Unlock()
 	if _, ok := s.users[chat]; ok {
 		return false, nil
@@ -123,7 +154,10 @@ func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, er
 }
 
 func (s *Store) Approve(chat string) (User, error) {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return User{}, err
+	}
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok {
@@ -134,7 +168,10 @@ func (s *Store) Approve(chat string) (User, error) {
 }
 
 func (s *Store) Remove(chat string) error {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	defer s.mu.Unlock()
 	if _, ok := s.users[chat]; !ok {
 		return ErrUnknown
@@ -146,7 +183,10 @@ func (s *Store) Remove(chat string) error {
 // Add stores a search for an active user, within the limit. The same query twice is
 // refused: it would announce every listing twice.
 func (s *Store) Add(chat, name string, query url.Values, limit int, now time.Time) (Search, error) {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return Search{}, err
+	}
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok || !user.Active {
@@ -180,7 +220,10 @@ func (s *Store) Search(chat, id string) (Search, error) {
 }
 
 func (s *Store) Delete(chat, id string) (Search, error) {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return Search{}, err
+	}
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok {
@@ -197,7 +240,10 @@ func (s *Store) Delete(chat, id string) (Search, error) {
 
 // SetMuted switches a search off or back on, and answers it in its new position.
 func (s *Store) SetMuted(chat, id string, muted bool) (Search, error) {
-	s.mu.Lock()
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return Search{}, err
+	}
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok {
@@ -226,7 +272,13 @@ func (s *Store) save() error {
 	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	if info, err := os.Stat(s.path); err == nil {
+		s.read = info.ModTime()
+	}
+	return nil
 }
 
 func clone(user *User) User {
