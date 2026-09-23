@@ -14,9 +14,8 @@ var (
 	ErrNoFilter   = errors.New("esa búsqueda no filtra nada: ponle un texto, una categoría o una marca")
 )
 
-// dropped are the parameters that describe how the page was reached rather than what is
-// being looked for. distance is among them because the API ignores it: the radius that
-// filters is distance_in_km.
+// dropped say how the page was reached, not what is looked for. The API ignores distance;
+// the radius is distance_in_km.
 var dropped = map[string]bool{
 	"order_by":        true,
 	"source":          true,
@@ -27,8 +26,7 @@ var dropped = map[string]bool{
 	"distance":        true,
 }
 
-// FromWebURL turns the address of a search made on the web into the query the API
-// answers. Both use the same parameter names, so this is mostly a filter.
+// FromWebURL is mostly a filter: the web and the API share parameter names.
 func FromWebURL(raw string) (url.Values, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
@@ -55,8 +53,7 @@ func FromWebURL(raw string) (url.Values, error) {
 	return Searchable(query), nil
 }
 
-// Searchable fixes the two parameters the API insists on: without source it answers 400,
-// and newest is the order in which something new shows up first.
+// Searchable sets source, without which the API answers 400, and orders by newest.
 func Searchable(query url.Values) url.Values {
 	out := url.Values{}
 	for key, values := range query {
@@ -67,8 +64,7 @@ func Searchable(query url.Values) url.Values {
 	return out
 }
 
-// RadiusKm is the radius a query is limited to, or zero when it covers the whole country:
-// a radius without a point to measure it from is ignored.
+// RadiusKm is empty without coordinates: the API ignores a radius with no point.
 func RadiusKm(query url.Values) string {
 	if query.Get("latitude") == "" || query.Get("longitude") == "" {
 		return ""
@@ -76,7 +72,6 @@ func RadiusKm(query url.Values) string {
 	return query.Get("distance_in_km")
 }
 
-// WebURL is the search as a person opens it.
 func WebURL(query url.Values) string {
 	shown := url.Values{}
 	for key, values := range query {
@@ -87,7 +82,7 @@ func WebURL(query url.Values) string {
 	return DefaultWebURL + "/search?" + shown.Encode()
 }
 
-// A price is written the Spanish way, so 1.200 is a thousand two hundred.
+// A price is written the Spanish way: 1.200 is 1200.
 const price = `(\d{1,3}(?:\.\d{3})+|\d+)\s*(?:€|euros?)?`
 
 var (
@@ -97,9 +92,7 @@ var (
 	radius       = regexp.MustCompile(`(?i)(?:\ba\s+)?\b(\d+)\s*km\b`)
 )
 
-// FromText is a search written the way it is said, for the phone app, which has no way to
-// share one: "bici 100-300", "kallax hasta 40", "moto a 30 km". What is not a price or a
-// radius is the text searched for.
+// FromText reads "bici 100-300", "kallax hasta 40", "moto a 30 km": the app cannot share a search.
 func FromText(text string) (url.Values, error) {
 	query := url.Values{}
 	take := func(re *regexp.Regexp, set func(m []string)) {
@@ -126,7 +119,7 @@ func FromText(text string) (url.Values, error) {
 
 func plain(number string) string { return strings.ReplaceAll(number, ".", "") }
 
-// Near limits a query to a radius around a point, keeping the radius it already asked for.
+// Near keeps a radius the query already asked for.
 func Near(query url.Values, latitude, longitude float64, defaultKm int) url.Values {
 	out := Searchable(query)
 	out.Set("latitude", strconv.FormatFloat(latitude, 'f', 5, 64))

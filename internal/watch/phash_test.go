@@ -12,8 +12,7 @@ import (
 	"testing"
 )
 
-// gradient is a picture with something in it: a flat image hashes to nothing useful, and a
-// sawtooth one is not a photograph either. This is smooth, with a darker block for shape.
+// A flat image hashes to nothing useful, so this has a gradient and a darker block.
 func gradient(w, h int, seed int) image.Image {
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	for y := 0; y < h; y++ {
@@ -28,7 +27,6 @@ func gradient(w, h int, seed int) image.Image {
 	return img
 }
 
-// noise is the control: two unrelated photographs must not land close.
 func noise(w, h int, seed uint64) image.Image {
 	rng := rand.New(rand.NewPCG(seed, seed))
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -41,7 +39,6 @@ func noise(w, h int, seed uint64) image.Image {
 	return img
 }
 
-// shrink resamples a picture the way a thumbnail is made.
 func shrink(src image.Image, w, h int) image.Image {
 	bounds := src.Bounds()
 	out := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -53,8 +50,6 @@ func shrink(src image.Image, w, h int) image.Image {
 	return out
 }
 
-// The same photograph uploaded again comes back at another size and through another pass
-// of JPEG, which is what the threshold has to survive.
 func TestHashSurvivesResizeAndCompression(t *testing.T) {
 	photo := gradient(320, 240, 1)
 	original := Hash(photo)

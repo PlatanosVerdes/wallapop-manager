@@ -1,5 +1,4 @@
-// Package watch follows the searches and says what has just appeared. The hard part
-// is not finding new listings: it is deciding that two of them are the same thing.
+// Package watch follows the searches and announces what is new.
 package watch
 
 import (
@@ -15,24 +14,15 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
-// The same van is posted from eleven towns by eleven accounts at eleven prices, and the
-// words barely agree: measured on a live search, the photograph is what identifies it.
-// So the picture decides first and the words are the fallback for a listing photographed
-// again. Thresholds come from that measurement: over 5.886 pairs, 1.5% sat under 10 bits
-// apart and the rest piled up above 20.
+// Dealers repost one vehicle from many accounts, so the photo identifies it, not the title.
+// Measured over 5.886 pairs: 1.5% sat under 10 bits apart, the rest above 20.
 const (
-	// SamePhoto is how many of the 64 bits two photo hashes may disagree on.
 	SamePhoto = 10
-	// A photo match still has to agree on price. Two sellers sharing a picture are either
-	// the same advert posted twice, and then the price barely moves, or two people who
-	// both used the maker's catalogue shot of the same white IKEA shelf, and then it does.
-	samePhotoPrice = 0.10
-	// The seller reposting his own listing is free to reprice it: it is still his thing.
+	// Two sellers with the same catalogue photo are two items, and their prices differ.
+	samePhotoPrice       = 0.10
 	samePhotoPriceSeller = 0.50
 
-	// Words only fold two listings when the seller is the same one, because he is the only
-	// person who can repost his own thing. Two strangers selling the same white IKEA shelf
-	// write the same title at the same price, and that is two shelves, not one.
+	// Words only match within one seller: strangers write the same title for different items.
 	sameSeller      = 0.6
 	sameSellerPrice = 0.30
 )
@@ -43,28 +33,21 @@ type Record struct {
 	Title  string   `json:"title"`
 	Tokens []string `json:"tokens"`
 	Price  float64  `json:"price"`
-	// Lowest is the cheapest this listing has ever been while watched. Drops are measured
-	// against it and not against yesterday's price, so a seller bouncing between two
-	// numbers is announced once and not every week.
+	// Drops are measured against the lowest price, so a price bouncing back and forth is announced once.
 	Lowest float64  `json:"lowest,omitempty"`
 	Hashes []uint64 `json:"hashes,omitempty"`
 	City   string   `json:"city,omitempty"`
 	Search string   `json:"search,omitempty"`
-	// CopyOf is the listing this one turned out to be a copy of. A copy is never
-	// announced, and that holds for its price as much as for its arrival: eleven accounts
-	// repricing one van is one piece of news.
+	// A copy is never announced, not even its price drops.
 	CopyOf    string    `json:"copy_of,omitempty"`
 	FirstSeen time.Time `json:"first_seen"`
 }
 
 type Seen struct {
-	// Searches remembers when each search was first watched. A search seen for the
-	// first time is recorded in silence: its whole first page is old news.
 	Searches map[string]time.Time `json:"searches"`
 	Records  []Record             `json:"records"`
 
-	path string
-	// index is the id lookup, rebuilt on load.
+	path  string
 	index map[string]int
 }
 
@@ -103,8 +86,7 @@ func (s *Seen) Known(id string) bool {
 	return ok
 }
 
-// Watched reports whether this search has been through a pass before. The first pass of a
-// new search announces nothing.
+// The first pass of a new search announces nothing: its first page is old news.
 func (s *Seen) Watched(searchID string) bool {
 	_, ok := s.Searches[searchID]
 	return ok
@@ -116,9 +98,7 @@ func (s *Seen) MarkWatched(searchID string, at time.Time) {
 	}
 }
 
-// Duplicate looks for a listing already recorded that is this same thing under another id:
-// reposted from a different town, or edited a little and uploaded again. The reason is
-// returned so a dry run can say which rule caught it.
+// Duplicate returns the reason too, so a dry run can say which rule matched.
 func (s *Seen) Duplicate(item wallapop.SearchItem, hashes []uint64) (Record, string, bool) {
 	tokens := Tokenize(item.Title)
 	price := item.Price.Amount
@@ -156,8 +136,7 @@ func (s *Seen) Duplicate(item wallapop.SearchItem, hashes []uint64) (Record, str
 	return best, bestReason, bestReason != ""
 }
 
-// closestPhoto is the smallest distance between any photo of one listing and any of the
-// other. A listing with no usable hash answers 65, which no threshold accepts.
+// No usable hash answers 65, which no threshold accepts.
 func closestPhoto(a, b []uint64) int {
 	closest := 65
 	for _, one := range a {
@@ -174,7 +153,6 @@ func (s *Seen) Add(item wallapop.SearchItem, hashes []uint64, search string, at 
 	s.add(item, hashes, search, "", at)
 }
 
-// AddCopy records a listing that is another one under a different id.
 func (s *Seen) AddCopy(item wallapop.SearchItem, hashes []uint64, search, copyOf string, at time.Time) {
 	s.add(item, hashes, search, copyOf, at)
 }
@@ -200,11 +178,7 @@ func (s *Seen) add(item wallapop.SearchItem, hashes []uint64, search, copyOf str
 	s.index[item.ID] = len(s.Records) - 1
 }
 
-// Cheaper reports a listing that now costs less than it ever has, by enough to be worth
-// saying. It answers false for a copy: the listing it copies is the one that speaks.
-//
-// The stored price is refreshed either way, so the same drop is never announced twice and
-// a price going back up is simply remembered.
+// The stored price is refreshed either way, so the same drop is never announced twice.
 func (s *Seen) Cheaper(item wallapop.SearchItem, drop float64) (before float64, worth bool) {
 	i, ok := s.index[item.ID]
 	if !ok {
@@ -230,8 +204,6 @@ func (s *Seen) Cheaper(item wallapop.SearchItem, drop float64) (before float64, 
 	return was, (was-now)/was >= drop
 }
 
-// Prune drops what is too old to be a duplicate of anything arriving now, which is what
-// keeps the file from growing forever.
 func (s *Seen) Prune(ttl time.Duration, now time.Time) {
 	if ttl <= 0 {
 		return
@@ -259,8 +231,7 @@ func (s *Seen) Save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// closePrice answers whether two prices are near enough to be the same thing. A listing
-// with no price is matched on words alone.
+// A missing price never rules a match out.
 func closePrice(a, b, tolerance float64) bool {
 	if a <= 0 || b <= 0 {
 		return true
@@ -268,7 +239,6 @@ func closePrice(a, b, tolerance float64) bool {
 	return math.Abs(a-b)/math.Max(a, b) <= tolerance
 }
 
-// Similarity is how much of the two sets of words is shared.
 func Similarity(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -290,8 +260,7 @@ func Similarity(a, b []string) float64 {
 	return float64(shared) / float64(union)
 }
 
-// filler are the words a seller writes around the thing itself. Leaving them in makes two
-// unrelated listings look alike.
+// filler words make unrelated listings look alike.
 var filler = map[string]bool{
 	"vendo": true, "venta": true, "nuevo": true, "nueva": true, "seminuevo": true,
 	"con": true, "sin": true, "por": true, "para": true, "del": true, "las": true,
@@ -299,8 +268,6 @@ var filler = map[string]bool{
 	"estado": true, "mas": true, "que": true, "año": true, "ano": true, "anos": true,
 }
 
-// Tokenize reduces a title to the words that identify the thing: no accents, no case, no
-// punctuation, no filler, each word once and in order so the set is comparable.
 func Tokenize(title string) []string {
 	var builder strings.Builder
 	for _, r := range strings.ToLower(title) {
@@ -315,8 +282,7 @@ func Tokenize(title string) []string {
 	unique := map[string]bool{}
 	var tokens []string
 	for _, token := range strings.Fields(builder.String()) {
-		// A lone letter says nothing, but a lone digit does: "2 puertas" is not
-		// "4 puertas".
+		// A lone digit matters: "2 puertas" is not "4 puertas".
 		if filler[token] || unique[token] || (len(token) < 2 && !unicode.IsDigit(rune(token[0]))) {
 			continue
 		}

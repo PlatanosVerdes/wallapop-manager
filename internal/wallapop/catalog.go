@@ -10,9 +10,7 @@ import (
 	"time"
 )
 
-// The two endpoints and the verb come from a captured browser request. They are variables
-// so a change on Wallapop's side is a redeploy (WALLA_PATH_ITEMS, WALLA_PATH_REACTIVATE,
-// WALLA_REACTIVATE_METHOD) and not a rebuild.
+// Taken from a captured browser request; variables so a change on their side is a redeploy.
 var (
 	PathItems        = "/api/v3/user/items"
 	PathReactivate   = "/api/v3/items/%s/reactivate"
@@ -22,7 +20,7 @@ var (
 
 var ErrNoItemsDecoded = errors.New("wallapop: the items response carried no recognisable list")
 
-// HeaderNextPage carries the pagination cursor. The body's meta object comes back empty.
+// HeaderNextPage carries the cursor; the body's meta object comes back empty.
 const HeaderNextPage = "X-NextPage"
 
 type Price struct {
@@ -30,8 +28,7 @@ type Price struct {
 	Currency string  `json:"currency"`
 }
 
-// Flag is how the API answers a yes/no: {"flag": true}, and the whole object is absent
-// when the answer is no.
+// Flag is the API's yes/no: {"flag": true}, or absent for no.
 type Flag struct {
 	Flag bool `json:"flag"`
 }
@@ -54,14 +51,12 @@ func (i Item) Modified() time.Time {
 	return time.UnixMilli(i.ModifiedDate)
 }
 
-// NeedsReactivation is what the catalogue page draws the pink button from.
 func (i Item) NeedsReactivation() bool { return i.Expired != nil && i.Expired.Flag }
 
 func (i Item) String() string {
 	return fmt.Sprintf("%s (%.0f %s)", i.Title, i.Price.Amount, i.Price.Currency)
 }
 
-// MyItems lists the whole catalogue, following the cursor while there is one.
 func (c *Client) MyItems(ctx context.Context) ([]Item, error) {
 	var all []Item
 	next := ""
@@ -91,7 +86,6 @@ func (c *Client) MyItems(ctx context.Context) ([]Item, error) {
 	return all, nil
 }
 
-// decodeItems accepts the {"data": [...]} wrapper and a bare array.
 func decodeItems(raw json.RawMessage) ([]Item, error) {
 	var wrapped struct {
 		Data []Item `json:"data"`
@@ -106,7 +100,7 @@ func decodeItems(raw json.RawMessage) ([]Item, error) {
 	return nil, fmt.Errorf("%w: %s", ErrNoItemsDecoded, snippet(raw))
 }
 
-// Reactivate presses the button. A clean call answers 204 with no body.
+// Reactivate succeeds with a 204 and no body.
 func (c *Client) Reactivate(ctx context.Context, itemID string) error {
 	_, err := c.do(ctx, ReactivateMethod, fmt.Sprintf(PathReactivate, itemID), nil, nil, nil)
 	return err

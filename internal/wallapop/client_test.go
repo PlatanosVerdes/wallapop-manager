@@ -94,7 +94,6 @@ func TestReactivateAcceptsNoContent(t *testing.T) {
 	}
 }
 
-// A spent access token is the routine case: renew and retry, the way the web app does.
 func TestSpentAccessTokenIsRenewedAndRetried(t *testing.T) {
 	var calls []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +137,6 @@ func TestSpentAccessTokenIsRenewedAndRetried(t *testing.T) {
 	}
 }
 
-// A spent refresh token is the case only a human can fix.
 func TestDeadRefreshTokenNeedsAHuman(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(headerUnauthorized, reasonRefreshExpired)
@@ -167,7 +165,7 @@ func TestNoCookieStored(t *testing.T) {
 	}
 }
 
-// A revoked cookie is answered with an empty session and a 200, not with an error.
+// A revoked cookie gets a 200 with an empty session, not an error.
 func TestEmptySessionAnswerNeedsAHuman(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == PathSession {

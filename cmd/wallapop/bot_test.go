@@ -41,7 +41,6 @@ func friend() commands.Request {
 	return commands.Request{Chat: telegram.Chat{ID: 200, FirstName: "Ana"}}
 }
 
-// The bot is public: /start is all it takes, up to the cap.
 func TestStartLetsAnybodyIn(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -53,7 +52,7 @@ func TestStartLetsAnybodyIn(t *testing.T) {
 		t.Fatal("/start did not let the friend in")
 	}
 
-	// The owner and Ana make two of three; the third joins and the fourth finds it full.
+	// Owner and Ana are two of three: the third fits, the fourth does not.
 	_, _ = b.start(ctx, commands.Request{Chat: telegram.Chat{ID: 300}})
 	reply, _ := b.start(ctx, commands.Request{Chat: telegram.Chat{ID: 400}})
 	if b.people.IsActive("400") || !strings.Contains(reply.Text, "lleno") {
@@ -61,7 +60,7 @@ func TestStartLetsAnybodyIn(t *testing.T) {
 	}
 }
 
-// The owner is created before writing anything, so the name comes with the first /start.
+// The owner exists before writing, so the name arrives with the first /start.
 func TestStartKeepsTheNameUpToDate(t *testing.T) {
 	b := newBot(t)
 	_, _ = b.start(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100, FirstName: "Jorge"}})
@@ -87,8 +86,6 @@ func TestAPastedAddressBecomesASearch(t *testing.T) {
 	}
 }
 
-// A search written out is shown as understood, and saved on the ✅: a chat is also where
-// people just talk.
 func TestAWrittenSearchWaitsForItsTick(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -116,7 +113,6 @@ func TestAWrittenSearchWaitsForItsTick(t *testing.T) {
 	}
 }
 
-// An older card cannot save the search shown after it.
 func TestAnOlderCardSavesNothing(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -144,7 +140,6 @@ func TestSmallTalkIsNoSearch(t *testing.T) {
 	}
 }
 
-// /nueva alone asks, and the answer is saved without a card.
 func TestNuevaAloneTakesTheNextMessage(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -163,8 +158,7 @@ func TestNuevaAloneTakesTheNextMessage(t *testing.T) {
 	}
 }
 
-// A location narrows the latest search, and the search starts over so what was already
-// around there is not announced as new.
+// The narrowed search gets a new id, so its first round stays silent.
 func TestALocationNarrowsTheLatestSearch(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -190,7 +184,6 @@ func TestALocationNarrowsTheLatestSearch(t *testing.T) {
 	}
 }
 
-// Every press is looked up inside the chat it came from.
 func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -247,7 +240,6 @@ func TestLeavingRemovesEverything(t *testing.T) {
 	}
 }
 
-// The name can go before the address or after it, pasted or behind /nueva.
 func TestTheNameGoesAroundTheAddress(t *testing.T) {
 	b := newBot(t)
 	coches := "https://es.wallapop.com/search?category_id=100&brand=Citroen&order_by=closest"
@@ -268,7 +260,6 @@ func TestTheNameGoesAroundTheAddress(t *testing.T) {
 	}
 }
 
-// The pencil makes the next message the new name, and only the next one.
 func TestThePencilRenames(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -286,7 +277,6 @@ func TestThePencilRenames(t *testing.T) {
 		t.Fatalf("the search is called %q", got.Name)
 	}
 
-	// The question has been answered: the next message is not a name any more.
 	me.Args = "otra cosa"
 	_, _ = b.onText(ctx, me)
 	if got, _ := b.people.Search(ownerChat, search.ID); got.Name != "las motos" {
@@ -294,7 +284,6 @@ func TestThePencilRenames(t *testing.T) {
 	}
 }
 
-// An address sent while a name is expected is still a new search.
 func TestAnAddressIsNotAName(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -312,7 +301,6 @@ func TestAnAddressIsNotAName(t *testing.T) {
 	}
 }
 
-// Nobody renames another chat's search with a forged pencil.
 func TestAForgedPencilRenamesNothing(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
@@ -326,7 +314,6 @@ func TestAForgedPencilRenamesNothing(t *testing.T) {
 	}
 }
 
-// fakeSearch answers every search with nothing and records which ones were asked.
 func fakeSearch(t *testing.T, b *botState) func() []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -347,8 +334,7 @@ func fakeSearch(t *testing.T, b *botState) func() []string {
 	}
 }
 
-// /ahora with a search picked reads that one alone, even silenced; "Todas" skips the
-// silenced ones as a round does.
+// A picked search is read even when silenced; "Todas" skips silenced ones, like a round.
 func TestCheckReadsTheSearchPicked(t *testing.T) {
 	b := newBot(t)
 	asked := fakeSearch(t, b)

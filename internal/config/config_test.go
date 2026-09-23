@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// Every field of the struct has to be filled in Load: one that is only declared reads as
-// its zero value, and a zero wait turns the ticker into a spin loop.
+// A field declared but not filled in Load reads as zero, and a zero wait spins.
 func TestDefaultsAreUsable(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {

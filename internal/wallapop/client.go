@@ -1,6 +1,4 @@
-// Package wallapop talks to the private API the Wallapop web app uses. The official
-// Connect API is only open to PRO sellers with a registered OAuth client, so a personal
-// account has to go the same way the browser does.
+// Package wallapop uses the web app's private API: the official one is only for PRO sellers.
 package wallapop
 
 import (
@@ -19,27 +17,24 @@ import (
 const (
 	DefaultBaseURL   = "https://api.wallapop.com"
 	DefaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
-	// Web build number sent by the app. Cosmetic as far as the API cares, but it is part
-	// of what a real request looks like.
+	// The web build number: the API ignores it, but a real request carries it.
 	DefaultAppVersion = "826680"
 )
 
 var (
-	// ErrUnauthorized means the session is finished: a human has to import a new one.
-	ErrUnauthorized = errors.New("wallapop: session rejected")
-	// ErrAccessExpired is the routine case the client fixes by itself.
+	// ErrUnauthorized means a human has to import a new session.
+	ErrUnauthorized  = errors.New("wallapop: session rejected")
 	ErrAccessExpired = errors.New("wallapop: access token expired")
 )
 
 type Client struct {
 	BaseURL string
-	// WebURL is the site itself, which is where sessions are renewed.
+	// WebURL is where sessions are renewed.
 	WebURL     string
 	Scheme     SignScheme
 	UserAgent  string
 	AppVersion string
-	// DeviceID goes out as x-deviceid. It is the device_id claim of the session token, so
-	// it matches the browser the session was born in.
+	// DeviceID is the session token's device_id claim, so it matches the browser.
 	DeviceID string
 	Session  TokenSource
 	HTTP     *http.Client
@@ -67,8 +62,7 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("wallapop: %s answered %d: %s", e.Path, e.Status, e.Body)
 }
 
-// setCommonHeaders sends the same set a real browser call carries. deviceos is duplicated
-// because the web app sends both spellings.
+// deviceos is sent twice because the web app sends both spellings.
 func (c *Client) setCommonHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "es,en-US;q=0.9")
@@ -83,8 +77,7 @@ func (c *Client) setCommonHeaders(req *http.Request) {
 	}
 }
 
-// do renews the session and retries once when the access token turns out to be spent,
-// which is the same thing the web app's interceptor does.
+// do renews and retries once on a spent access token, like the web app's interceptor.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) (http.Header, error) {
 	var encoded []byte
 	if body != nil {
@@ -104,14 +97,12 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	header, err = c.attempt(ctx, method, path, query, encoded, out, true)
 	if errors.Is(err, ErrAccessExpired) {
-		// Renewed and still rejected: the session is not coming back on its own.
 		return header, fmt.Errorf("%w: rejected right after a renewal", ErrUnauthorized)
 	}
 	return header, err
 }
 
-// public calls an endpoint that needs no session, and deliberately sends no bearer: the
-// catalogue search works anonymously, so watching it is not traffic tied to the account.
+// public sends no bearer on purpose, so watching searches is not tied to the account.
 func (c *Client) public(ctx context.Context, path string, query url.Values, out any) error {
 	_, err := c.attempt(ctx, "GET", path, query, nil, out, false)
 	return err
@@ -136,8 +127,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, query url.Val
 	if auth {
 		req.Header.Set("Authorization", "Bearer "+c.Session.AccessToken())
 	} else {
-		// The device id is the browser the session was born in; an anonymous call that
-		// carried it would still be traceable back to the account.
+		// The device id would still tie an anonymous call to the account.
 		req.Header.Del("X-DeviceId")
 	}
 	if payload != nil {

@@ -51,7 +51,6 @@ func TestFromWebURLRefusesWhatIsNotASearch(t *testing.T) {
 	}
 }
 
-// A radius needs a point to be measured from, and without one the API covers the country.
 func TestRadiusNeedsAPoint(t *testing.T) {
 	query, err := FromWebURL("https://es.wallapop.com/search?keywords=kallax&distance_in_km=5")
 	if err != nil {

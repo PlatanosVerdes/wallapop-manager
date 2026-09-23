@@ -55,7 +55,6 @@ func TestSearchLimitAndRepeats(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// What was written is what comes back.
 	again, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -84,8 +83,6 @@ func TestSearchesOfOneChatAreNotAnother(t *testing.T) {
 	}
 }
 
-// The terminal adds searches to the same file while the service runs: the service has to
-// see them, and must not save over them.
 func TestAnotherWriterIsNotLost(t *testing.T) {
 	dir := t.TempDir()
 	service, _ := Load(dir)

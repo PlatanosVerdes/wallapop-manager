@@ -23,7 +23,6 @@ func TestItemSlug(t *testing.T) {
 	}
 }
 
-// The address carries the slug, the page the id, and the API the rest.
 func TestListingMakesASearchLikeIt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

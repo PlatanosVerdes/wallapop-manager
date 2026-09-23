@@ -7,7 +7,6 @@ import (
 	"unicode"
 )
 
-// greetings are what people write to a bot that is not something to look for.
 var greetings = map[string]bool{
 	"hola": true, "holi": true, "holaa": true, "buenas": true, "hey": true, "ey": true, "hi": true, "hello": true,
 	"gracias": true, "muchas gracias": true, "grax": true, "thx": true, "thanks": true, "merci": true,
@@ -21,8 +20,6 @@ var greetings = map[string]bool{
 
 var laughter = regexp.MustCompile(`^(ja|je|ji|jo|ha|he|ke|xd)+[ajhexd]*$`)
 
-// smallTalk is a message that is chat rather than a search: a greeting, a laugh, or
-// nothing but emoji and punctuation.
 func smallTalk(text string) bool {
 	plain := strings.Join(strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)

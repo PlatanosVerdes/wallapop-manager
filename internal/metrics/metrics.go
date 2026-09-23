@@ -1,5 +1,4 @@
-// Package metrics pushes what the alert rules watch. The service says nothing by itself:
-// it reports state, and Grafana decides when that is worth waking somebody for.
+// Package metrics pushes state to the Pushgateway; Grafana decides what is an alert.
 package metrics
 
 import (
@@ -12,7 +11,6 @@ import (
 	"time"
 )
 
-// Gauge is one metric line plus the help text Prometheus shows next to it.
 type Gauge struct {
 	Name  string
 	Help  string
@@ -20,7 +18,7 @@ type Gauge struct {
 }
 
 type Pusher struct {
-	// URL is the Pushgateway base, empty when there is nothing to push to.
+	// Empty URL pushes nothing.
 	URL    string
 	Job    string
 	Client *http.Client
@@ -32,8 +30,7 @@ func New(url, job string) *Pusher {
 
 func (p *Pusher) Enabled() bool { return p != nil && p.URL != "" }
 
-// Push replaces this job's whole metric group, so nothing stale is left behind from an
-// earlier pass.
+// Push replaces the job's whole group, so nothing stale is left behind.
 func (p *Pusher) Push(ctx context.Context, gauges []Gauge) error {
 	if !p.Enabled() {
 		return nil

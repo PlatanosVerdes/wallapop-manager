@@ -16,7 +16,6 @@ var PathItem = "/api/v3/items/"
 
 const likeWords = 3
 
-// Listing is what a search like it is made from.
 type Listing struct {
 	ID       string
 	Title    string
@@ -25,8 +24,7 @@ type Listing struct {
 	Price    float64
 }
 
-// ItemSlug is the listing an address points to: the app shares them as
-// wallapop.com/item/<slug>, and the web as es.wallapop.com/item/<slug>.
+// The app shares wallapop.com/item/<slug>, the web es.wallapop.com/item/<slug>.
 func ItemSlug(raw string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -40,8 +38,7 @@ func ItemSlug(raw string) (string, bool) {
 	return slug, ok && slug != "" && !strings.Contains(slug, "/")
 }
 
-// The API answers a listing by its id, and an address only carries the slug: the id is in
-// the page the slug opens.
+// The API wants the id and the address carries the slug: the id is in the page.
 var pageItemID = regexp.MustCompile(`"item":\{"id":"([a-z0-9]+)"`)
 
 func (c *Client) Listing(ctx context.Context, slug string) (Listing, error) {
@@ -112,9 +109,8 @@ func (c *Client) itemID(ctx context.Context, slug string) (string, error) {
 
 var ErrNoListing = fmt.Errorf("ese anuncio ya no está en Wallapop")
 
-// LikeListing is the search for things like a listing: the start of its title in its
-// category, up to a fifth dearer than it. The whole title finds that listing alone, since
-// every word has to be there.
+// LikeListing keeps the start of the title: every word must match, so the whole title
+// finds that listing alone.
 func LikeListing(l Listing) url.Values {
 	words := strings.Fields(l.Title)
 	if len(words) > likeWords {

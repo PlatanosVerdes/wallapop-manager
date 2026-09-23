@@ -1,5 +1,4 @@
-// Package config reads everything from the environment so compose is the only place
-// where this service is configured.
+// Package config reads everything from the environment, so compose is the only config.
 package config
 
 import (
@@ -20,8 +19,7 @@ type Config struct {
 	DeviceID   string
 	AppVersion string
 
-	Interval time.Duration
-	// RetryEvery is how soon a failed pass is tried again.
+	Interval   time.Duration
 	RetryEvery time.Duration
 	Port       int
 
@@ -29,18 +27,14 @@ type Config struct {
 	MaxPause  time.Duration
 	MaxPerRun int
 
-	// Pushgateway is empty when there is nothing to report to, which is the case
-	// outside the Pi.
+	// Pushgateway is empty outside the Pi.
 	Pushgateway string
 	WarnBefore  time.Duration
 
-	// The watcher: the bot, the users' searches, and what it is allowed to say.
 	TelegramToken string
-	// TelegramChat is the owner's chat, the only one told about the catalogue and the
-	// session.
+	// TelegramChat is the owner's, the only one told about the catalogue and the session.
 	TelegramChat string
-	// MaxSearches is how many searches one chat may keep, and MaxUsers how many chats may
-	// join: the bot is public, and every search is requests from the Pi.
+	// The bot is public and every search is requests from the Pi, hence the caps.
 	MaxSearches    int
 	MaxUsers       int
 	WatchMin       time.Duration
@@ -48,18 +42,16 @@ type Config struct {
 	WatchMaxAge    time.Duration
 	WatchMaxAlerts int
 	WatchPhotos    int
-	// SearchPages is how many pages of each search a deep round reads. One page is 40.
+	// SearchPages is read on a deep round. One page is 40 listings.
 	SearchPages int
-	// DeepEvery is how often a round reads every page instead of the first one, which is
-	// what keeps the prices further down a search watched.
+	// DeepEvery keeps the prices further down a search watched.
 	DeepEvery time.Duration
-	// WatchDrop is the share of its own lowest price a listing has to shed before the
-	// fall is worth a message. Zero says nothing about prices.
+	// WatchDrop is the share of its lowest price a listing must shed to be announced; 0 is off.
 	WatchDrop     float64
 	WatchMinPause time.Duration
 	WatchMaxPause time.Duration
 	SeenTTL       time.Duration
-	// PlacesURL is the geocoder that turns "en Sant Cugat" into a point. Empty turns it off.
+	// PlacesURL is the geocoder for "en <town>"; empty turns it off.
 	PlacesURL string
 
 	LogJSON bool
@@ -102,8 +94,7 @@ func Load() (Config, error) {
 		LogJSON: env("WALLA_LOG_JSON", "") == "1",
 	}
 
-	// A wait of zero would turn the ticker into a spin loop, which is exactly what an
-	// unset field did on 2026-09-03: 7887 passes in a minute.
+	// A zero wait turns the ticker into a spin loop.
 	if cfg.RetryEvery < time.Minute {
 		return cfg, fmt.Errorf("WALLA_RETRY_EVERY (%s) is under a minute, which would spin", cfg.RetryEvery)
 	}
@@ -158,8 +149,6 @@ func number(key string, fallback int) int {
 	return v
 }
 
-// percent reads a whole percentage, because "5" is how a drop is talked about and 0.05 is
-// not.
 func percent(key string, fallback float64) float64 {
 	v, err := strconv.ParseFloat(os.Getenv(key), 64)
 	if err != nil || v < 0 {

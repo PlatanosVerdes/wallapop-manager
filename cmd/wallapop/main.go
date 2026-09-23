@@ -155,7 +155,6 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		return err
 	}
 
-	// Written by the loops and read by the health handler, so they cross goroutines.
 	var next, nextWatch atomic.Int64
 	next.Store(time.Now().Unix())
 	nextWatch.Store(time.Now().Unix())
@@ -180,9 +179,7 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		}
 	}()
 
-	// The jobs keep their own clocks: the catalogue is a daily errand, the searches are
-	// checked on a short random one so the pattern is not a metronome, and the bot answers
-	// whenever it is asked.
+	// Rounds run on a random clock so the traffic has no fixed pattern.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -190,8 +187,7 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 		for {
 			res := onePass(ctx, cfg, store, log, false)
 
-			// A pass that failed is retried on a short clock: a session imported by hand
-			// should take effect in minutes, not on tomorrow's tick.
+			// Retry soon, so a session imported by hand works in minutes, not tomorrow.
 			wait := *interval
 			if !res.OK() {
 				wait = cfg.RetryEvery
@@ -261,7 +257,7 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// loadUsers reads who uses the bot, with the owner always among them.
+// loadUsers always includes the owner.
 func loadUsers(cfg config.Config) (*users.Store, error) {
 	people, err := users.Load(cfg.DataDir)
 	if err != nil {
@@ -276,7 +272,7 @@ func loadUsers(cfg config.Config) (*users.Store, error) {
 	return people, nil
 }
 
-// userDir is where one chat's own state lives, so leaving the bot is removing a folder.
+// One folder per chat, so leaving the bot is removing it.
 func userDir(cfg config.Config, chat string) string {
 	return filepath.Join(cfg.DataDir, "users", chat)
 }
@@ -305,8 +301,6 @@ func cmdWatch(cfg config.Config, log *slog.Logger, args []string) error {
 	return nil
 }
 
-// cmdSearches is the terminal view of who uses the bot and what they look for, and the way
-// to give somebody a search without going through Telegram.
 func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 	people, err := loadUsers(cfg)
 	if err != nil {
@@ -347,7 +341,6 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 	return nil
 }
 
-// addSearch is the one way a search comes in, from the bot or from the terminal.
 func addSearch(ctx context.Context, cfg config.Config, people *users.Store, chat, input, name string) (users.Search, error) {
 	query, place, err := parseSearch(ctx, cfg, input)
 	if err != nil {
@@ -359,8 +352,6 @@ func addSearch(ctx context.Context, cfg config.Config, people *users.Store, chat
 	return people.Add(chat, name, place, query, cfg.MaxSearches, time.Now())
 }
 
-// parseSearch reads what a search can arrive as: the address of a search made on the web,
-// the address of a listing to look for more like it, or the search written out.
 func parseSearch(ctx context.Context, cfg config.Config, input string) (url.Values, string, error) {
 	if !strings.Contains(input, "wallapop.com") {
 		return fromText(ctx, places.New(cfg.PlacesURL), input)
@@ -376,8 +367,7 @@ func parseSearch(ctx context.Context, cfg config.Config, input string) (url.Valu
 	return query, "", err
 }
 
-// fromText reads a written search, and the town after its last "en" when there is one: "funda
-// en piel" keeps its "en" because piel is no town.
+// The town is what follows the last "en", only if it is a town: "funda en piel" keeps it.
 func fromText(ctx context.Context, finder *places.Finder, text string) (url.Values, string, error) {
 	query, err := wallapop.FromText(text)
 	if err != nil || !finder.Enabled() {
@@ -400,8 +390,6 @@ func fromText(ctx context.Context, finder *places.Finder, text string) (url.Valu
 	return wallapop.Near(query, place.Latitude, place.Longitude, defaultRadiusKm), place.Name, nil
 }
 
-// searchName is what a search is called when nobody names it: what was typed, or else the
-// make and model picked from the filters.
 func searchName(query url.Values) string {
 	if keywords := strings.TrimSpace(query.Get("keywords")); keywords != "" {
 		return keywords
@@ -412,9 +400,7 @@ func searchName(query url.Values) string {
 	return "busqueda de la categoria " + query.Get("category_id")
 }
 
-// round is what a round is asked to do. Chat narrows it to one user and Search to one of
-// that user's searches, which is what /ahora runs; a search asked for by name is read even
-// when it is silenced.
+// A search picked by id is read even when silenced.
 type round struct {
 	DryRun bool
 	Deep   bool
@@ -422,19 +408,16 @@ type round struct {
 	Search string
 }
 
-// watching serialises the rounds: the clock and a command can ask for one at the same
-// time, and two rounds at once would announce the same listing twice.
+// Two rounds at once would announce the same listing twice.
 var watching sync.Mutex
 
-// watchPass waits its turn: the clock would rather run late than not at all.
 func watchPass(ctx context.Context, cfg config.Config, people *users.Store, log *slog.Logger, r round) watch.Result {
 	watching.Lock()
 	defer watching.Unlock()
 	return runWatch(ctx, cfg, people, log, r)
 }
 
-// runWatch goes through every active chat in turn. Each one has its own memory of what it
-// has seen, so a listing announced to one friend is still news to another.
+// Each chat has its own seen list, so a listing told to one friend is news to another.
 func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *slog.Logger, r round) watch.Result {
 	opt := watch.Options{
 		MaxAge:        cfg.WatchMaxAge,
@@ -451,8 +434,7 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 	if !r.DryRun && !bot.Enabled() {
 		log.Warn("no telegram configured, so nothing will be announced")
 	}
-	// The searches are public and need no session: nothing here is signed as the owner.
-	// One catalogue for the whole round, so a search two friends share is asked once.
+	// Searches need no session. One catalogue per round, so a shared search is asked once.
 	catalogue := watch.NewCatalogue(newClient(cfg, session.NewStore(cfg.DataDir)), cfg.WatchMinPause, cfg.WatchMaxPause)
 
 	total := watch.Result{StartedAt: time.Now(), DryRun: r.DryRun, Deep: r.Deep}
@@ -492,7 +474,6 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		var notify watch.Notifier
 		switch {
 		case r.DryRun:
-			// The dry run prints the message it would have sent, markup and all.
 			notify = &printer{chat: user.Chat}
 		case bot.Enabled():
 			notify = &messenger{bot: bot.To(user.Chat)}
@@ -524,8 +505,6 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 	return total
 }
 
-// messenger turns a listing into the message that reaches the phone, with the one button
-// worth having there: enough of this search for now.
 type messenger struct{ bot *telegram.Bot }
 
 func (m *messenger) Listing(ctx context.Context, search watch.Search, item wallapop.SearchItem) error {
@@ -546,7 +525,7 @@ type printer struct{ chat string }
 func (p printer) Listing(_ context.Context, search watch.Search, item wallapop.SearchItem) error {
 	fmt.Println("--- to", p.chat)
 	fmt.Println(watch.Line(search.Name, item, telegram.Escape))
-	// On the phone these two hang from buttons; on a terminal they have to be printed.
+	// On a terminal the buttons have to be printed.
 	fmt.Println("enlace:", item.URL())
 	fmt.Println("foto:  ", item.Photo())
 	return nil
@@ -565,8 +544,7 @@ func (p printer) Say(_ context.Context, text string) error {
 	return nil
 }
 
-// onePass renews the session, does the round, and reports state. It never sends a message
-// of its own: the alert rules decide what is worth waking somebody for.
+// onePass never sends a message itself: the alert rules decide.
 func onePass(ctx context.Context, cfg config.Config, store *session.Store, log *slog.Logger, dryRun bool) reactivate.Result {
 	report := func(res reactivate.Result) reactivate.Result {
 		if err := reactivate.SaveResult(cfg.DataDir, res); err != nil {
@@ -587,9 +565,7 @@ func onePass(ctx context.Context, cfg config.Config, store *session.Store, log *
 	}
 	client := newClient(cfg, store)
 
-	// The access token lasts five minutes, so it is spent between passes. Renewing up
-	// front saves a rejected request; the client also renews on its own if a call is
-	// rejected mid-pass.
+	// The access token lasts five minutes, so it is always spent between passes.
 	if store.AccessSpent() {
 		if err := client.RenewSession(ctx); err != nil {
 			log.Error("the session could not be renewed", "err", err)
@@ -606,8 +582,7 @@ func onePass(ctx context.Context, cfg config.Config, store *session.Store, log *
 	}, log))
 }
 
-// push reports the pass as gauges. Status follows the convention the other rules use:
-// 0 is fine, 1 is a failure a retry may fix, 2 needs a human.
+// Status: 0 fine, 1 a retry may fix it, 2 needs a human.
 func push(ctx context.Context, cfg config.Config, store *session.Store, res reactivate.Result) error {
 	status := 0.0
 	switch {
@@ -623,7 +598,7 @@ func push(ctx context.Context, cfg config.Config, store *session.Store, res reac
 		{Name: "wallapop_expired_listings", Help: "Listings found expired in the last pass", Value: float64(res.Expired)},
 		{Name: "wallapop_reactivated_listings", Help: "Listings reactivated in the last pass", Value: float64(len(res.Reactivated))},
 	}
-	// Days of unattended runway left, and -1 when it is not known yet.
+	// -1 when not known yet.
 	days := -1.0
 	if sess := store.Current(); sess != nil {
 		if left, ok := sess.Renewable(); ok {
@@ -639,8 +614,6 @@ func push(ctx context.Context, cfg config.Config, store *session.Store, res reac
 	return metrics.New(cfg.Pushgateway, "wallapop-manager").Push(ctx, gauges)
 }
 
-// pushWatch reports the round the same way: gauges, and the alert rules decide. The
-// listings themselves are not metrics, only how many there were.
 func pushWatch(ctx context.Context, cfg config.Config, res watch.Result) error {
 	status := 0.0
 	switch {
@@ -693,7 +666,7 @@ func cmdSession(cfg config.Config, store *session.Store, args []string) error {
 		}
 		fmt.Printf("session stored in %s\n", store.Path())
 
-		// Renewing straight away turns "stored" into "works".
+		// Renew now to prove the imported cookie works.
 		if err := newClient(cfg, store).RenewSession(context.Background()); err != nil {
 			return fmt.Errorf("stored, but it cannot mint a token: %w", err)
 		}
@@ -741,8 +714,7 @@ func printSession(sess *session.Session) {
 	}
 }
 
-// cmdSign stays for the day Wallapop brings request signing back: given a captured call,
-// it says which payload layout reproduces the signature.
+// cmdSign is kept for when Wallapop brings request signing back.
 func cmdSign(cfg config.Config, args []string) error {
 	if len(args) < 3 {
 		return errors.New("sign needs: <method> <path> <timestamp> [signature]")

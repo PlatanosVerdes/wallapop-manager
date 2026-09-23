@@ -1,4 +1,4 @@
-// Package places turns the name of a town into the point a search is measured from.
+// Package places turns a town name into coordinates.
 package places
 
 import (
@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// DefaultURL is OpenStreetMap's geocoder: free and without an account, at one request a
-// second, which a search being saved never gets near.
+// DefaultURL is OpenStreetMap's geocoder: no account, one request a second.
 const DefaultURL = "https://nominatim.openstreetmap.org"
 
 type Place struct {
@@ -33,8 +32,7 @@ func New(base string) *Finder {
 
 func (f *Finder) Enabled() bool { return f != nil && f.URL != "" }
 
-// Find answers the Spanish town, district or province with that name, and false when
-// there is none: a street or a shop called that is not where a search is made.
+// Find answers false for a street or a shop: only towns, districts and provinces count.
 func (f *Finder) Find(ctx context.Context, name string) (Place, bool, error) {
 	form := url.Values{
 		"q":               {name},

@@ -1,5 +1,4 @@
-// Package users keeps who may use the bot and what each of them is looking for. A user is
-// a Telegram chat: the chat is where the listings go and where the commands come from.
+// Package users stores each chat and its searches.
 package users
 
 import (
@@ -24,21 +23,19 @@ var (
 )
 
 type User struct {
-	Chat string `json:"chat"`
-	Name string `json:"name"`
-	// Active is what lets a chat past /start.
+	Chat     string    `json:"chat"`
+	Name     string    `json:"name"`
 	Active   bool      `json:"active"`
 	Since    time.Time `json:"since"`
 	Searches []Search  `json:"searches,omitempty"`
 }
 
 type Search struct {
-	// ID is short on purpose: it travels inside callback_data, which Telegram caps at 64
-	// bytes.
+	// ID is short: it travels in callback_data, which Telegram caps at 64 bytes.
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Query string `json:"query"`
-	// Place is the town the search is measured from, when it was named rather than sent.
+	// Place is set when the town was written, not sent as a location.
 	Place string    `json:"place,omitempty"`
 	Muted bool      `json:"muted,omitempty"`
 	Added time.Time `json:"added"`
@@ -53,9 +50,7 @@ type Store struct {
 	mu    sync.Mutex
 	path  string
 	users map[string]*User
-	// read is when the file last read or written was modified. The terminal writes the
-	// same file while the service runs, and a store that never looked again would save
-	// over it.
+	// read is the file's mtime when last seen: the terminal writes it while the service runs.
 	read time.Time
 }
 
@@ -67,7 +62,7 @@ func Load(dir string) (*Store, error) {
 	return store, nil
 }
 
-// refresh reads the file again when somebody else has written it since. Callers hold mu.
+// refresh expects mu to be held.
 func (s *Store) refresh() error {
 	info, err := os.Stat(s.path)
 	if os.IsNotExist(err) {
@@ -95,14 +90,13 @@ func (s *Store) refresh() error {
 	return nil
 }
 
-// lock takes the store and brings it up to date with the file. A file that cannot be read
-// leaves what was in memory, which is the last state this process knew to be good.
+// lock keeps what is in memory when the file cannot be read.
 func (s *Store) lock() error {
 	s.mu.Lock()
 	return s.refresh()
 }
 
-// Get answers a copy, so a round can walk a user's searches while a button edits them.
+// Get answers a copy, so a round can walk the searches while a button edits them.
 func (s *Store) Get(chat string) (User, bool) {
 	_ = s.lock()
 	defer s.mu.Unlock()
@@ -118,7 +112,6 @@ func (s *Store) IsActive(chat string) bool {
 	return ok && user.Active
 }
 
-// All answers every user, active or waiting, ordered by the time they arrived.
 func (s *Store) All() []User {
 	_ = s.lock()
 	defer s.mu.Unlock()
@@ -140,7 +133,7 @@ func (s *Store) Active() []User {
 	return out
 }
 
-// Request records a chat joining. It reports false when the chat was already known.
+// Request reports false when the chat was already known.
 func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -154,7 +147,6 @@ func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, er
 	return true, s.save()
 }
 
-// Rename keeps the name a chat is shown by in step with Telegram's.
 func (s *Store) Rename(chat, name string) error {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -185,8 +177,7 @@ func (s *Store) Remove(chat string) error {
 	return s.save()
 }
 
-// Add stores a search for an active user, within the limit. The same query twice is
-// refused: it would announce every listing twice.
+// Add refuses the same query twice: it would announce every listing twice.
 func (s *Store) Add(chat, name, place string, query url.Values, limit int, now time.Time) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -243,7 +234,6 @@ func (s *Store) Delete(chat, id string) (Search, error) {
 	return Search{}, ErrNoSuchSearch
 }
 
-// RenameSearch gives a search the name its messages call it by.
 func (s *Store) RenameSearch(chat, id, name string) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -263,8 +253,7 @@ func (s *Store) RenameSearch(chat, id, name string) (Search, error) {
 	return Search{}, ErrNoSuchSearch
 }
 
-// SetQuery changes what a search looks for. It gets a new id, so its first round records
-// what is already there instead of announcing it as new.
+// SetQuery gives the search a new id, so its first round is silent again.
 func (s *Store) SetQuery(chat, id, place string, query url.Values) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -292,7 +281,6 @@ func (s *Store) SetQuery(chat, id, place string, query url.Values) (Search, erro
 	return Search{}, ErrNoSuchSearch
 }
 
-// SetMuted switches a search off or back on, and answers it in its new position.
 func (s *Store) SetMuted(chat, id string, muted bool) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
