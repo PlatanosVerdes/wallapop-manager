@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +16,7 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/users"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
 const (
@@ -22,7 +27,8 @@ const (
 
 func newBot(t *testing.T) *botState {
 	t.Helper()
-	cfg := config.Config{DataDir: t.TempDir(), TelegramChat: ownerChat, MaxSearches: 3, MaxUsers: 3}
+	cfg := config.Config{DataDir: t.TempDir(), TelegramChat: ownerChat, MaxSearches: 3, MaxUsers: 3,
+		Scheme: wallapop.SchemeNone}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	people, err := loadUsers(cfg)
 	if err != nil {
@@ -214,5 +220,64 @@ func TestAForgedPencilRenamesNothing(t *testing.T) {
 	_, _ = b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 200}, Args: "mia"})
 	if got, _ := b.people.Search(ownerChat, search.ID); got.Name != "Motos" {
 		t.Fatalf("another chat renamed the search to %q", got.Name)
+	}
+}
+
+// fakeSearch answers every search with nothing and records which ones were asked.
+func fakeSearch(t *testing.T, b *botState) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.Query().Get("keywords"))
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"section": map[string]any{
+			"payload": map[string]any{"items": []any{}}}}})
+	}))
+	t.Cleanup(srv.Close)
+	b.cfg.BaseURL = srv.URL
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), asked...)
+	}
+}
+
+// /ahora with a search picked reads that one alone, even silenced; "Todas" skips the
+// silenced ones as a round does.
+func TestCheckReadsTheSearchPicked(t *testing.T) {
+	b := newBot(t)
+	asked := fakeSearch(t, b)
+	ctx := context.Background()
+	kallax, _ := addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
+	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
+	_, _ = b.people.SetMuted(ownerChat, kallax.ID, true)
+
+	_, keys, err := b.onButton(ctx, ownerChat, buttonCheck+kallax.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asked(); len(got) != 1 || got[0] != "kallax" {
+		t.Fatalf("asked %v, expected kallax alone", got)
+	}
+	if keys == nil || !strings.Contains(keys.Rows[0][0].Text, "kallax: 0 mirados") {
+		t.Fatalf("the receipt was %+v", keys)
+	}
+
+	_, _, _ = b.onButton(ctx, ownerChat, buttonCheck)
+	if got := asked(); len(got) != 2 || got[1] != "bici" {
+		t.Fatalf("asked %v, expected bici after kallax", got)
+	}
+}
+
+func TestCheckOffersEverySearchAndAll(t *testing.T) {
+	b := newBot(t)
+	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
+	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
+	user, _ := b.people.Get(ownerChat)
+	keys := checkKeys(user)
+	if len(keys.Rows) != 3 || keys.Rows[2][0].Data != buttonCheck {
+		t.Fatalf("the choice was drawn as %+v", keys.Rows)
 	}
 }

@@ -24,6 +24,7 @@ const (
 	buttonMute      = "m:"
 	buttonAskDelete = "d:"
 	buttonRename    = "e:"
+	buttonCheck     = "n:"
 	buttonDelete    = "D:"
 	buttonKeep      = "k:"
 	buttonLeave     = "B:"
@@ -91,15 +92,15 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 			Name: "ahora",
 			Help: "Buscar ahora",
 			Run: func(ctx context.Context, req commands.Request) (commands.Reply, error) {
-				// A command would rather be told no than queue behind a round that is
-				// already doing the very thing it asked for.
-				if !watching.TryLock() {
-					return commands.Reply{}, commands.ErrBusy
+				user, _ := b.people.Get(req.ChatID())
+				switch len(user.Searches) {
+				case 0:
+					return commands.Say("🔎 <b>Aún no tienes búsquedas</b>\n\n" + howToAdd), nil
+				case 1:
+					text, err := b.check(ctx, req.ChatID(), user.Searches[0].ID)
+					return commands.Say(text), err
 				}
-				defer watching.Unlock()
-				// The new listings announce themselves; this is only the receipt.
-				res := runWatch(ctx, b.cfg, b.people, b.log, round{Chat: req.ChatID()})
-				return commands.Say(htmlRound(res)), nil
+				return commands.Reply{Text: "🔎 ¿Qué busco?", Keys: checkKeys(user)}, nil
 			},
 		},
 		{
@@ -272,6 +273,13 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		}
 		return "Escríbeme el nombre", nil, nil
 
+	case buttonCheck:
+		text, err := b.check(ctx, chat, arg)
+		if err != nil {
+			return err.Error(), nil, nil
+		}
+		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off(text)}}}, nil
+
 	case buttonAskDelete:
 		search, err := b.people.Search(chat, arg)
 		if err != nil {
@@ -322,6 +330,51 @@ func (b *botState) keysOf(chat string) *telegram.Keyboard {
 	return &telegram.Keyboard{}
 }
 
+// check runs one of a chat's searches now, or all of them when id is empty. The new
+// listings announce themselves; what comes back is only the receipt.
+func (b *botState) check(ctx context.Context, chat, id string) (string, error) {
+	name := "Todas"
+	if id != "" {
+		search, err := b.people.Search(chat, id)
+		if err != nil {
+			return "", err
+		}
+		name = search.Name
+	}
+	// A command would rather be told no than queue behind a round that is already doing
+	// the very thing it asked for.
+	if !watching.TryLock() {
+		return "", commands.ErrBusy
+	}
+	defer watching.Unlock()
+	res := runWatch(ctx, b.cfg, b.people, b.log, round{Chat: chat, Search: id})
+	if res.Error != "" {
+		return "", fmt.Errorf("no he podido buscar: %s", res.Error)
+	}
+	text := fmt.Sprintf("🔎 %s: %d mirados · %d nuevos", name, res.Scanned, len(res.New))
+	if len(res.Cheaper) > 0 {
+		text += fmt.Sprintf(" · %d más baratos", len(res.Cheaper))
+	}
+	if len(res.Failures) > 0 {
+		text += " · ⚠️ " + res.Failures[0].Error
+	}
+	return text, nil
+}
+
+// checkKeys offers each search to run now, and all of them at once.
+func checkKeys(user users.User) *telegram.Keyboard {
+	keys := &telegram.Keyboard{}
+	for _, search := range user.Searches {
+		text := "🔎 " + search.Name
+		if search.Muted {
+			text = "🔕 " + search.Name
+		}
+		keys.Rows = append(keys.Rows, []telegram.Button{{Text: text, Data: buttonCheck + search.ID}})
+	}
+	keys.Rows = append(keys.Rows, []telegram.Button{{Text: "Todas", Data: buttonCheck, Style: "primary"}})
+	return keys
+}
+
 // listingKeys puts the two things a listing is for under it: opening it, and hearing less
 // of that search.
 func listingKeys(search watch.Search, item wallapop.SearchItem) *telegram.Keyboard {
@@ -367,26 +420,5 @@ func searchesText(user users.User, limit int) string {
 		fmt.Fprintf(&t, " · %d silenciadas", muted)
 	}
 	t.WriteString("\n<i>🔔 silenciar · ✏️ renombrar · 🗑 eliminar</i>")
-	return t.String()
-}
-
-// htmlRound is what a round looks like when it is read rather than logged: the numbers
-// that changed in bold, the rest as context.
-func htmlRound(res watch.Result) string {
-	if res.Error != "" {
-		return "⚠️ <b>No he podido buscar</b>\n" + telegram.Escape(res.Error)
-	}
-
-	var t strings.Builder
-	if res.Watched == 0 {
-		return "🔎 No tienes búsquedas activas"
-	}
-	fmt.Fprintf(&t, "🔎 %d anuncios mirados · <b>%d nuevos</b>", res.Scanned, len(res.New))
-	if len(res.Cheaper) > 0 {
-		fmt.Fprintf(&t, " · <b>%d más baratos</b>", len(res.Cheaper))
-	}
-	for _, f := range res.Failures {
-		fmt.Fprintf(&t, "\n⚠️ %s: %s", telegram.Escape(f.Search), telegram.Escape(f.Error))
-	}
 	return t.String()
 }

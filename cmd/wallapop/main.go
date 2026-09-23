@@ -370,12 +370,14 @@ func searchName(query url.Values) string {
 	return "busqueda de la categoria " + query.Get("category_id")
 }
 
-// round is what a round is asked to do: Chat narrows it to one user, which is what the
-// bot's own button runs.
+// round is what a round is asked to do. Chat narrows it to one user and Search to one of
+// that user's searches, which is what /ahora runs; a search asked for by name is read even
+// when it is silenced.
 type round struct {
 	DryRun bool
 	Deep   bool
 	Chat   string
+	Search string
 }
 
 // watching serialises the rounds: the clock and a command can ask for one at the same
@@ -419,7 +421,10 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		var searches []watch.Search
 		silenced := 0
 		for _, search := range user.Searches {
-			if search.Muted {
+			if r.Search != "" && search.ID != r.Search {
+				continue
+			}
+			if search.Muted && r.Search == "" {
 				silenced++
 				continue
 			}
