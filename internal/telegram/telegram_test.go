@@ -20,7 +20,6 @@ func TestEnabled(t *testing.T) {
 	}
 }
 
-// Telegram refuses a photo it cannot fetch. The listing still has to arrive.
 func TestPhotoFallsBackToText(t *testing.T) {
 	var called []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +43,6 @@ func TestPhotoFallsBackToText(t *testing.T) {
 	}
 }
 
-// A caption longer than Telegram's limit goes as a message, not as a rejected photo.
 func TestLongCaptionSkipsThePhoto(t *testing.T) {
 	var called []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +73,6 @@ func TestEscape(t *testing.T) {
 	}
 }
 
-// The token travels in the URL, so it must never reach a log line.
 func TestErrorsDoNotCarryTheToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusForbidden)

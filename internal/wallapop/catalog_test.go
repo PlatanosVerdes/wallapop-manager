@@ -2,8 +2,7 @@ package wallapop
 
 import "testing"
 
-// Shaped like a real answer: price is an object, and `expired` is present only on the
-// listings that need the button pressed.
+// Shaped like a real answer: `expired` is present only on listings to reactivate.
 const itemsFixture = `{
   "data": [
     {"id": "aaaaaaaaaaaa", "title": "Something on sale", "category_id": "12800",

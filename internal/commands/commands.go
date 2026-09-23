@@ -1,5 +1,4 @@
-// Package commands is the ear of the bot: it owns the updates, lets through the chats the
-// gate knows, and answers the handful of questions worth asking from the phone.
+// Package commands reads the bot's updates and answers them.
 package commands
 
 import (
@@ -15,26 +14,24 @@ import (
 )
 
 type Command struct {
-	// Name has no slash: "estado".
+	// Name has no slash: "busquedas".
 	Name string
 	Help string
-	// Open commands answer anybody. The rest answer only the chats the gate lets in.
+	// Open commands answer anybody, not only the chats Allowed lets in.
 	Open bool
 	Run  func(ctx context.Context, req Request) (Reply, error)
 }
 
-// Request is who asked, and whatever was written after the command.
 type Request struct {
 	Chat telegram.Chat
 	Args string
-	// Location is set when what was sent is a place and not text.
+	// Location is set when a place was sent instead of text.
 	Location *telegram.Location
 }
 
 func (r Request) ChatID() string { return strconv.FormatInt(r.Chat.ID, 10) }
 
-// Reply is what a command answers. Text is HTML, because a message read on a phone needs
-// weight and not columns: whoever builds it escapes what came from a stranger.
+// Reply.Text is HTML: whoever builds it escapes what came from a stranger.
 type Reply struct {
 	Text string
 	Keys *telegram.Keyboard
@@ -44,28 +41,19 @@ func Say(text string) Reply { return Reply{Text: text} }
 
 type Listener struct {
 	Bot *telegram.Bot
-	// Allowed is the gate. A bot is public: anybody who finds it can write to it, and only
-	// the chats this lets through get more than the open commands.
+	// Allowed is the gate: a public bot hears from anybody.
 	Allowed  func(chat string) bool
 	Commands []Command
-	// OnText answers a message from an allowed chat that is not a command.
-	OnText func(ctx context.Context, req Request) (Reply, error)
-	// OnButton answers a press. The notice is the banner raised on the phone, and a
-	// keyboard that comes back redraws the one that was pressed.
+	OnText   func(ctx context.Context, req Request) (Reply, error)
+	// OnButton's notice is the banner on the phone; returned keys redraw the pressed ones.
 	OnButton func(ctx context.Context, chat, data string) (notice string, keys *telegram.Keyboard, err error)
 	Log      *slog.Logger
-	// Backoff is the wait after a failed poll.
-	Backoff time.Duration
-	// StaleAfter is how old a message may be and still be acted on. It exists for the
-	// restart: the queue handed over on the first read holds whatever was sent while the
-	// process was down, and this service is redeployed often enough that a command sent
-	// seconds before a restart is one the sender is still waiting for, while one sent
-	// this morning is not.
+	Backoff  time.Duration
+	// StaleAfter drops older messages: after a restart the queue may hold hours-old ones.
 	StaleAfter time.Duration
 }
 
-// Serve reads updates until the context is done. It is the only place in the service that
-// calls getUpdates, because Telegram gives an update to one reader and refuses a second.
+// Serve is the only getUpdates caller in the service.
 func (l *Listener) Serve(ctx context.Context) error {
 	if l.Bot == nil || !l.Bot.Enabled() {
 		return nil
@@ -81,9 +69,6 @@ func (l *Listener) Serve(ctx context.Context) error {
 		l.Log.Warn("could not publish the command menu", "err", err)
 	}
 
-	// Start from the last update rather than from whatever is queued, and judge what comes
-	// back by its age: a command sent seconds before a restart still deserves an answer,
-	// one sent this morning does not.
 	offset, first := int64(-1), true
 	for {
 		updates, err := l.Bot.Updates(ctx, offset)
@@ -104,10 +89,7 @@ func (l *Listener) Serve(ctx context.Context) error {
 			offset = update.UpdateID + 1
 			switch {
 			case update.CallbackQuery != nil:
-				// A press carries no time of its own, so an old one cannot be told from a
-				// recent one. The queue found on the first read is left alone rather than
-				// silencing a search hours after somebody asked: a press lost to a
-				// restart is pressed again, and the button shows which way it went.
+				// A press has no timestamp, so presses queued before a restart are skipped.
 				if first {
 					continue
 				}
@@ -135,8 +117,7 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 	name, args := parse(msg.Text)
 	req := Request{Chat: msg.Chat, Args: args, Location: msg.Location}
 
-	// The lag is worth a number: what is felt as a slow bot is usually a command sent
-	// while the container was being replaced.
+	// A slow bot is usually a command sent while the container was being replaced.
 	lag := time.Duration(0)
 	if msg.Date > 0 {
 		lag = time.Since(time.Unix(msg.Date, 0)).Round(time.Second)
@@ -185,8 +166,6 @@ func (l *Listener) answer(ctx context.Context, chat, what string, run func() (Re
 	}
 }
 
-// press deals with a button. Telegram leaves the phone spinning until the query is
-// answered, so every path out of here answers it.
 func (l *Listener) press(ctx context.Context, query telegram.CallbackQuery) {
 	if query.Message == nil || !l.allowed(strconv.FormatInt(query.Message.Chat.ID, 10)) {
 		l.Log.Warn("a button press from a chat not let in was ignored")
@@ -214,9 +193,7 @@ func (l *Listener) press(ctx context.Context, query telegram.CallbackQuery) {
 	}
 }
 
-// parse pulls the command out of a message: the first word, without the slash and without
-// the @bot suffix a group chat adds, and the rest as its arguments. A message that is not a
-// command comes back whole as the arguments.
+// parse drops the slash and the @bot suffix group chats add; plain text comes back as args.
 func parse(text string) (name, args string) {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "/") {
@@ -230,7 +207,6 @@ func parse(text string) (name, args string) {
 	return strings.ToLower(name), strings.TrimSpace(rest)
 }
 
-// Help is the answer to the help command, built from the table so it cannot drift from it.
 func Help(commands []Command) string {
 	var b strings.Builder
 	for _, cmd := range commands {
@@ -239,5 +215,4 @@ func Help(commands []Command) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// ErrBusy is what a command answers when the round it would start is already running.
 var ErrBusy = errors.New("ya estoy buscando, prueba en un momento")

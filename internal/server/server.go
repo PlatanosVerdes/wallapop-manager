@@ -1,5 +1,4 @@
-// Package server exposes the health endpoint. It answers one question: does this need a
-// human? A dead session does; a failed pass that will retry does not.
+// Package server answers /healthz: a dead session needs a human, a failed pass does not.
 package server
 
 import (
@@ -25,8 +24,7 @@ type payload struct {
 	Status  string `json:"status"`
 	Version string `json:"version"`
 	Session string `json:"session"`
-	// The access token lasts minutes and is minted on every pass, so what is worth
-	// reporting is how long the session can keep minting them.
+	// The access token lasts minutes; what matters is how long the session can mint them.
 	RenewableDays *float64           `json:"renewable_days_left,omitempty"`
 	NextRun       string             `json:"next_run,omitempty"`
 	LastRun       *reactivate.Result `json:"last_run,omitempty"`
@@ -37,9 +35,8 @@ type payload struct {
 func (h *Health) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		// Always 200 while the process is alive. A session that needs a human is not a
-		// service that stopped answering, and the blackbox probe reads any other code as
-		// exactly that: the alert for the session comes from wallapop_last_run_status.
+		// Always 200: the blackbox probe reads anything else as down. The session alert
+		// comes from wallapop_last_run_status.
 		body := payload{Status: "ok", Version: h.Version, Session: "ok"}
 		down := func(why string) {
 			body.Session = why
@@ -70,8 +67,7 @@ func (h *Health) Handler() http.Handler {
 			body.LastRun = &res
 			switch {
 			case res.NeedsHuman && body.Status == "ok":
-				// Only when the session itself looks fine: otherwise its own reason is
-				// the specific one and this would bury it.
+				// Only when the session looks fine, so its own reason is not buried.
 				down("the last pass needs a human: " + res.Error)
 			case res.NeedsHuman:
 				body.Status = "down"
@@ -79,8 +75,7 @@ func (h *Health) Handler() http.Handler {
 				body.Status = "warn"
 			}
 		}
-		// The watcher is reported but does not decide the status: a search that failed is
-		// tried again in minutes and is nobody's emergency.
+		// A failed search retries in minutes, so it does not decide the status.
 		if res, ok := watch.LoadResult(h.DataDir); ok {
 			body.LastWatch = &res
 		}

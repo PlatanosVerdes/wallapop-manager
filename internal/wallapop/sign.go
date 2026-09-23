@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// SignScheme selects how the X-Signature payload is built. The web app no longer signs
-// anything (a captured 2026 request carries only the bearer and the device headers), so
-// the default is none and the two older layouts stay here for the day it comes back.
+// SignScheme: the web app stopped signing in 2026, so none is the default; the old
+// layouts stay for the day it comes back.
 type SignScheme string
 
 const (
@@ -28,8 +27,7 @@ func ValidScheme(s SignScheme) bool {
 	return ok
 }
 
-// Keys shipped inside the client, recovered by rmonvfer/wallapop_secret. Each one is
-// base64 of the actual HMAC key.
+// Keys recovered by rmonvfer/wallapop_secret, each the base64 of the HMAC key.
 var signKeys = map[SignScheme]string{
 	SchemePipe:   "Tm93IHRoYXQgeW91J3ZlIGZvdW5kIHRoaXMsIGFyZSB5b3UgcmVhZHkgdG8gam9pbiB1cz8gam9ic0B3YWxsYXBvcC5jb20=",
 	SchemeLegacy: "UTI5dVozSmhkSE1zSUhsdmRTZDJaU0JtYjNWdVpDQnBkQ0VnUVhKbElIbHZkU0J5WldGa2VTQjBieUJxYjJsdUlIVnpQeUJxYjJKelFIZGhiR3hoY0c5d0xtTnZiUT09",
@@ -37,8 +35,7 @@ var signKeys = map[SignScheme]string{
 
 func Schemes() []SignScheme { return []SignScheme{SchemePipe, SchemeLegacy} }
 
-// Sign returns the X-Signature value for a request. path is the request path with no
-// host and no query string; ts is the same value sent in the timestamp header.
+// Sign takes the path without host or query, and ts as sent in the timestamp header.
 func Sign(scheme SignScheme, method, path string, ts int64) (string, error) {
 	encoded, ok := signKeys[scheme]
 	if !ok {
@@ -65,7 +62,6 @@ func Sign(scheme SignScheme, method, path string, ts int64) (string, error) {
 	return base64.StdEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
-// MatchScheme reports which scheme reproduces a signature captured from the browser.
 func MatchScheme(method, path string, ts int64, want string) (SignScheme, bool) {
 	for _, s := range Schemes() {
 		got, err := Sign(s, method, path, ts)

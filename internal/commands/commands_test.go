@@ -31,7 +31,6 @@ func TestParse(t *testing.T) {
 	}
 }
 
-// telegramFake answers the three calls the listener makes and records what was sent.
 type telegramFake struct {
 	mu       sync.Mutex
 	updates  []telegram.Update
@@ -42,8 +41,7 @@ type telegramFake struct {
 	menu     string
 	served   chan struct{}
 	requests int
-	// serveOn is the poll that hands the queue over. One is the bootstrap read, so a
-	// fixture placed there is what a restart finds waiting.
+	// serveOn is the poll that hands the queue over; poll one is the bootstrap read.
 	serveOn int
 }
 
@@ -59,8 +57,6 @@ func (f *telegramFake) server(t *testing.T) *telegram.Bot {
 			f.menu = r.Form.Get("commands")
 		case strings.HasSuffix(r.URL.Path, "getUpdates"):
 			f.requests++
-			// The first read is the bootstrap; the queue is handed over on the second and
-			// stays empty after that, which is what a long poll looks like.
 			out := []telegram.Update{}
 			if f.requests == f.serveOn {
 				out = f.updates
@@ -151,7 +147,6 @@ func TestCommandIsAnswered(t *testing.T) {
 	}
 }
 
-// A bot is public. Anybody can write to it, and a stranger gets the open commands alone.
 func TestAnotherChatIsIgnored(t *testing.T) {
 	fake := &telegramFake{updates: []telegram.Update{
 		message(2, 999999, "/estado"),
@@ -185,8 +180,6 @@ func TestStrangerCanOnlyStart(t *testing.T) {
 	}
 }
 
-// A message that is not a command goes to OnText, with the whole text as its arguments:
-// that is how a pasted address becomes a search.
 func TestTextGoesToOnText(t *testing.T) {
 	fake := &telegramFake{updates: []telegram.Update{
 		message(2, 1308329178, "https://es.wallapop.com/search?keywords=kallax"),
@@ -230,8 +223,7 @@ func TestHelpIsBuiltFromTheTable(t *testing.T) {
 	}
 }
 
-// Telegram keeps updates for 24 hours, so the first read after a long stop hands over
-// commands nobody is waiting for any more.
+// Telegram keeps updates for 24 hours, so a long stop leaves stale commands queued.
 func TestNothingIsReplayedAfterARestart(t *testing.T) {
 	fake := &telegramFake{
 		serveOn: 1,
@@ -283,7 +275,6 @@ func TestButtonIsAnsweredAndRedrawn(t *testing.T) {
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	// Telegram spins on the phone until the query is closed, whatever the outcome.
 	if len(fake.answered) != 1 || fake.answered[0] != "Silenciada Motos" {
 		t.Fatalf("the press was answered with %v", fake.answered)
 	}
@@ -336,8 +327,6 @@ func TestButtonFromAnotherChatIsIgnored(t *testing.T) {
 	}
 }
 
-// A command sent seconds before a restart is one its sender is still waiting for, so the
-// queue handed over on the first read is judged by age and not thrown away whole.
 func TestFreshCommandQueuedDuringARestartIsRun(t *testing.T) {
 	fake := &telegramFake{serveOn: 1, updates: []telegram.Update{
 		{UpdateID: 9, Message: &telegram.Message{
@@ -370,7 +359,6 @@ func TestStaleCommandIsDropped(t *testing.T) {
 	}
 }
 
-// A press has no time of its own, so the queue found on the first read is left alone.
 func TestQueuedPressIsNotReplayed(t *testing.T) {
 	fake := &telegramFake{serveOn: 1, updates: []telegram.Update{{
 		UpdateID: 9,

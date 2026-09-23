@@ -20,8 +20,7 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/watch"
 )
 
-// What a button sends back, by what it does. Telegram caps callback data at 64 bytes, so
-// the verb is one letter and the rest is a search id or a chat id.
+// Telegram caps callback data at 64 bytes: a one-letter verb, then a search or chat id.
 const (
 	buttonToggle    = "t:"
 	buttonMute      = "m:"
@@ -36,20 +35,17 @@ const (
 	buttonDiscard   = "c:"
 )
 
-// botState answers each chat about its own searches and nothing else: no other chat, and
-// nothing of the owner's account.
+// botState shows each chat its own searches only: nothing of other chats or the owner's account.
 type botState struct {
 	cfg    config.Config
 	people *users.Store
 	log    *slog.Logger
 	bot    *telegram.Bot
 
-	// renaming is the search each chat was asked a new name for. It lives in memory: a
-	// question lost to a restart is asked again by pressing the pencil.
+	// In memory on purpose: a question lost to a restart is asked again with the pencil.
 	mu       sync.Mutex
 	renaming map[string]renaming
-	// offers is the search each chat was shown and not yet said yes to, and asking the
-	// chats that pressed /nueva alone and whose next message is the search.
+	// offers are cards not yet ticked; asking are chats that sent /nueva alone.
 	offers map[string]offer
 	asking map[string]time.Time
 }
@@ -61,8 +57,6 @@ type offer struct {
 	made  time.Time
 }
 
-// offerWindow is how long a shown search waits for its ✅, and askWindow how long /nueva
-// alone waits for the search.
 const (
 	offerWindow = 30 * time.Minute
 	askWindow   = 5 * time.Minute
@@ -73,13 +67,12 @@ type renaming struct {
 	asked  time.Time
 }
 
-// renameWindow is how long the next message is taken as the new name.
 const renameWindow = 5 * time.Minute
 
-// nameLimit keeps a name short enough to fit on a button next to two others.
+// nameLimit fits a name on a button next to two others.
 const nameLimit = 40
 
-// pendingRename answers the search a chat is naming, and forgets the question either way.
+// pendingRename forgets the question either way.
 func (b *botState) pendingRename(chat string) (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -97,8 +90,7 @@ func (b *botState) keepOffer(chat string, o offer) {
 	b.offers[chat] = o
 }
 
-// takeOffer answers the shown search a press is for. An older card than the last one shown
-// finds nothing, so it cannot save the newer search by mistake.
+// An older card than the last one finds nothing, so it cannot save the newer search.
 func (b *botState) takeOffer(chat, token string) (offer, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -201,10 +193,9 @@ const (
 		"lo que escribas delante será su nombre.</i>"
 )
 
-// defaultRadiusKm is how far from a shared location a search reaches when it asked no radius.
 const defaultRadiusKm = 30
 
-// start is the only command a stranger can run, and all it takes to join.
+// start is the only command open to strangers.
 func (b *botState) start(_ context.Context, req commands.Request) (commands.Reply, error) {
 	chat, name := req.ChatID(), req.Chat.Name()
 	if _, ok := b.people.Get(chat); ok {
@@ -225,10 +216,8 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 	return commands.Say("👋 ¡Hola! " + intro + "\n\n" + howToAdd), nil
 }
 
-// onText takes whatever is not a command. The address of a web search is saved as it is,
-// with whatever is written around it as the name. A listing's address and a search written
-// out are shown first as what was understood, for a ✅: a chat is also where people just
-// talk. A shared location narrows the latest search to around it.
+// A web search address is saved at once; text and listings get a card first, since people
+// also just chat.
 func (b *botState) onText(ctx context.Context, req commands.Request) (commands.Reply, error) {
 	chat := req.ChatID()
 	if req.Location != nil {
@@ -259,7 +248,6 @@ func (b *botState) onText(ctx context.Context, req commands.Request) (commands.R
 	return b.offer(ctx, chat, req.Args)
 }
 
-// offer shows the search it understood, and saves it on the ✅.
 func (b *botState) offer(ctx context.Context, chat, input string) (commands.Reply, error) {
 	query, place, err := parseSearch(ctx, b.cfg, input)
 	if err != nil {
@@ -341,7 +329,6 @@ func (b *botState) saved(chat, title string, search users.Search) commands.Reply
 	}}}}
 }
 
-// describe is where a search looks and for how much, one line each.
 func describe(t *strings.Builder, place string, query url.Values) {
 	km := wallapop.RadiusKm(query)
 	switch {
@@ -369,8 +356,7 @@ func priceRange(min, max string) string {
 	return ""
 }
 
-// onButton is everything a press can do. The chat is the one the press came from, and
-// every search is looked up inside it, so nobody's button reaches somebody else's search.
+// Searches are looked up inside the pressing chat, so no button reaches another chat's search.
 func (b *botState) onButton(ctx context.Context, chat, data string) (string, *telegram.Keyboard, error) {
 	verb, arg := data, ""
 	if len(data) >= 2 {
@@ -398,7 +384,6 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		if err != nil {
 			return err.Error(), nil, nil
 		}
-		// The button that did it becomes the label saying it is done.
 		done := &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("🔕 " + search.Name + " silenciada")}}}
 		return "Silenciada. Se reactiva en /busquedas", done, nil
 
@@ -497,8 +482,7 @@ func (b *botState) keysOf(chat string) *telegram.Keyboard {
 	return &telegram.Keyboard{}
 }
 
-// check runs one of a chat's searches now, or all of them when id is empty. The new
-// listings announce themselves; what comes back is only the receipt.
+// check runs one search, or all when id is empty. New listings are sent by the round itself.
 func (b *botState) check(ctx context.Context, chat, id string) (string, error) {
 	name := "Todas"
 	if id != "" {
@@ -508,8 +492,7 @@ func (b *botState) check(ctx context.Context, chat, id string) (string, error) {
 		}
 		name = search.Name
 	}
-	// A command would rather be told no than queue behind a round that is already doing
-	// the very thing it asked for.
+	// Better to say busy than queue behind a round doing the same thing.
 	if !watching.TryLock() {
 		return "", commands.ErrBusy
 	}
@@ -528,7 +511,6 @@ func (b *botState) check(ctx context.Context, chat, id string) (string, error) {
 	return text, nil
 }
 
-// checkKeys offers each search to run now, and all of them at once.
 func checkKeys(user users.User) *telegram.Keyboard {
 	keys := &telegram.Keyboard{}
 	for _, search := range user.Searches {
@@ -542,8 +524,6 @@ func checkKeys(user users.User) *telegram.Keyboard {
 	return keys
 }
 
-// listingKeys puts the two things a listing is for under it: opening it, and hearing less
-// of that search.
 func listingKeys(search watch.Search, item wallapop.SearchItem) *telegram.Keyboard {
 	return &telegram.Keyboard{Rows: [][]telegram.Button{{
 		{Text: "🔗 Ver anuncio", URL: item.URL(), Style: "primary"},
@@ -551,7 +531,6 @@ func listingKeys(search watch.Search, item wallapop.SearchItem) *telegram.Keyboa
 	}}}
 }
 
-// searchKeys draws one row per search: the switch with its name, and the bin.
 func searchKeys(user users.User) *telegram.Keyboard {
 	keys := &telegram.Keyboard{}
 	for _, search := range user.Searches {

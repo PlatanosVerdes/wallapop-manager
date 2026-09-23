@@ -24,8 +24,6 @@ func get(t *testing.T, h *Health) (int, map[string]any) {
 	return rec.Code, body
 }
 
-// The blackbox probe reads any non-2xx as "the service stopped answering", so a session
-// waiting for a human must not look like one. That distinction is the metric's job.
 func TestHealthAnswers200WithNoSession(t *testing.T) {
 	dir := t.TempDir()
 	code, body := get(t, &Health{Version: "test", DataDir: dir, Store: session.NewStore(dir)})
@@ -74,7 +72,6 @@ func TestHealthWarnsOnAnExpiringSession(t *testing.T) {
 	}
 }
 
-// The session's own reason is the specific one: a generic "needs a human" must not bury it.
 func TestHealthKeepsTheSpecificReason(t *testing.T) {
 	dir := t.TempDir()
 	if err := reactivate.SaveResult(dir, reactivate.Result{Error: "boom", NeedsHuman: true}); err != nil {

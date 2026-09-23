@@ -1,5 +1,4 @@
-// Package reactivate is the pass itself: read the catalogue, press the button on
-// everything that has expired, and report what happened.
+// Package reactivate reactivates the expired listings of the catalogue.
 package reactivate
 
 import (
@@ -40,13 +39,12 @@ type Result struct {
 	Reactivated []string      `json:"reactivated,omitempty"`
 	Failures    []Failure     `json:"failures,omitempty"`
 	Error       string        `json:"error,omitempty"`
-	// NeedsHuman marks the one failure retrying cannot fix: the session is gone.
+	// NeedsHuman: the session is gone, and retrying cannot fix it.
 	NeedsHuman bool `json:"needs_human,omitempty"`
 }
 
 func (r Result) OK() bool { return r.Error == "" && len(r.Failures) == 0 }
 
-// Summary is what reaches Telegram and the health endpoint.
 func (r Result) Summary() string {
 	if r.Error != "" {
 		return "wallapop: la pasada ha fallado: " + r.Error
@@ -92,7 +90,7 @@ func Run(ctx context.Context, client *wallapop.Client, opt Options, log *slog.Lo
 		return res
 	}
 
-	// Oldest first: those are the ones that have been off the market longest.
+	// Oldest first: they have been off the market longest.
 	sort.Slice(pending, func(i, j int) bool { return pending[i].ModifiedDate < pending[j].ModifiedDate })
 	if opt.MaxPerRun > 0 && len(pending) > opt.MaxPerRun {
 		res.Skipped = len(pending) - opt.MaxPerRun
@@ -100,7 +98,6 @@ func Run(ctx context.Context, client *wallapop.Client, opt Options, log *slog.Lo
 	}
 
 	for i, item := range pending {
-		// Nothing is called on a dry run, so there is nothing to space out.
 		if i > 0 && !opt.DryRun {
 			if err := pause(ctx, opt.MinPause, opt.MaxPause); err != nil {
 				res.Error = err.Error()
@@ -131,8 +128,7 @@ func Run(ctx context.Context, client *wallapop.Client, opt Options, log *slog.Lo
 	return res
 }
 
-// pause spreads the calls out: ten listings hitting the API back to back is the one
-// pattern that reads as a bot.
+// Calls back to back are the pattern that reads as a bot.
 func pause(ctx context.Context, min, max time.Duration) error {
 	wait := min
 	if max > min {

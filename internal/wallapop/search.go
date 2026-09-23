@@ -8,7 +8,6 @@ import (
 
 var PathSearch = "/api/v3/search"
 
-// ItemURL is where a listing is read by a human.
 const ItemURL = "https://es.wallapop.com/item/"
 
 type Image struct {
@@ -64,8 +63,7 @@ func (i SearchItem) Photo() string {
 	return i.Images[0].URLs.Medium
 }
 
-// Where is the town a listing sits in, which is the field that tells two copies of the
-// same vehicle apart.
+// Where tells two copies of the same vehicle apart.
 func (i SearchItem) Where() string {
 	if i.Location.City != "" {
 		return i.Location.City
@@ -73,12 +71,8 @@ func (i SearchItem) Where() string {
 	return i.Location.Region
 }
 
-// Search runs a query against the public catalogue, following the cursor for up to pages
-// pages. It carries no session: the endpoint answers the same to anybody, and an anonymous
-// call cannot get the account flagged.
-//
-// A page is 40 listings and a search can hold more, so a single page would leave the
-// tail of it unwatched: those listings would never be seen to change price.
+// Search reads several pages: with one, listings past the first 40 would never be seen to
+// change price.
 func (c *Client) Search(ctx context.Context, query url.Values, pages int) ([]SearchItem, error) {
 	if pages < 1 {
 		pages = 1

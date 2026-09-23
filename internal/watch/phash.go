@@ -13,23 +13,17 @@ import (
 	"time"
 )
 
-// A listing reposted from another town is the same photographs uploaded again, so the
-// picture is the thing that identifies it, not the words. dHash reduces one to 64 bits:
-// the thumbnail is shrunk to a 9x8 grey grid and each bit says whether a cell is brighter
-// than the one on its right. Re-compression moves a bit or two and nothing else, so two
-// hashes within a few bits are the same photograph.
+// dHash: a 9x8 grey grid, each bit says whether a cell is brighter than its right neighbour.
+// Re-compression moves a bit or two, so hashes a few bits apart are the same photo.
 const (
 	hashWidth  = 9
 	hashHeight = 8
-	// MaxPhotoBytes is the ceiling on a thumbnail download. The small size is ~30 KB.
+	// Far above the ~30 KB thumbnail.
 	MaxPhotoBytes = 2 << 20
 )
 
-// Distance counts the bits two hashes disagree on.
 func Distance(a, b uint64) int { return bits.OnesCount64(a ^ b) }
 
-// Hash reduces an image to its dHash. It walks the source once per output cell, which for
-// a 320 px thumbnail is the whole image and a few hundred microseconds on the Pi.
 func Hash(img image.Image) uint64 {
 	bounds := img.Bounds()
 	if bounds.Dx() == 0 || bounds.Dy() == 0 {
@@ -75,8 +69,7 @@ func Hash(img image.Image) uint64 {
 	return hash
 }
 
-// Hasher downloads thumbnails and hashes them. It is used only on listings that are new,
-// so a quiet pass downloads nothing at all.
+// Hasher only runs on new listings, so a quiet pass downloads nothing.
 type Hasher struct {
 	HTTP  *http.Client
 	Limit int
@@ -86,8 +79,7 @@ func NewHasher(limit int) *Hasher {
 	return &Hasher{HTTP: &http.Client{Timeout: 15 * time.Second}, Limit: limit}
 }
 
-// Hashes fetches the first few photos of a listing and returns their hashes. A photo that
-// cannot be read is skipped: a missing hash costs a duplicate, never a wrong match.
+// An unreadable photo is skipped: a missing hash costs a duplicate, never a wrong match.
 func (h *Hasher) Hashes(ctx context.Context, urls []string) []uint64 {
 	var hashes []uint64
 	for i, url := range urls {
@@ -104,8 +96,7 @@ func (h *Hasher) Hashes(ctx context.Context, urls []string) []uint64 {
 }
 
 func (h *Hasher) one(ctx context.Context, url string) (uint64, error) {
-	// The small size is the one to hash: 320 px is plenty for 64 bits and a tenth of the
-	// bytes of the big one.
+	// 320 px is plenty for 64 bits, at a tenth of the bytes.
 	url = strings.Replace(url, "pictureSize=W800", "pictureSize=W320", 1)
 	url = strings.Replace(url, "pictureSize=W640", "pictureSize=W320", 1)
 

@@ -17,8 +17,6 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
-// stubSession is a session that is always fresh: the watcher's own calls are what is under
-// test, not the renewal, which has its own tests.
 type stubSession struct{}
 
 func (stubSession) AccessToken() string                    { return "token" }
@@ -46,14 +44,11 @@ func (r *recorder) Say(_ context.Context, text string) error {
 	return nil
 }
 
-// fakeWallapop answers the search a round makes, plus the photos.
 type fakeWallapop struct {
-	items   []wallapop.SearchItem
-	queries []string
-	// secondPage, when set, is served behind a cursor the way a long search answers.
+	items      []wallapop.SearchItem
+	queries    []string
 	secondPage []wallapop.SearchItem
-	// url is where the fake listens, so photo links in the fixtures are absolute.
-	url string
+	url        string
 }
 
 func (f *fakeWallapop) photo(name string) string { return f.url + "/" + name + ".jpg" }
@@ -63,8 +58,7 @@ func (f *fakeWallapop) server(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == wallapop.PathSearch:
-			// The catalogue search must go out anonymous: a bearer here would tie the
-			// watching to the account.
+			// A bearer here would tie the watching to the owner's account.
 			if r.Header.Get("Authorization") != "" {
 				http.Error(w, "the search carried a bearer", http.StatusBadRequest)
 				return
@@ -86,8 +80,6 @@ func (f *fakeWallapop) server(t *testing.T) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(body)
 		case strings.HasSuffix(r.URL.Path, ".jpg"):
-			// One picture per name, so two listings pointing at the same file are the
-			// only ones that hash alike.
 			seed := 0
 			for _, c := range r.URL.Path {
 				seed += int(c)
@@ -124,7 +116,6 @@ func newWatcher(t *testing.T, fake *fakeWallapop) (*wallapop.Client, Options) {
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
-// The first round of a search is silence: everything on that page was already there.
 func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 	searches := []Search{newSearch("s1", "kallax")}
 	fake := &fakeWallapop{}
@@ -145,7 +136,6 @@ func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 		t.Fatalf("seeded=%d watched=%d, expected 2 and 1", res.Seeded, res.Watched)
 	}
 
-	// Second round, one genuinely new listing.
 	fake.items = append(fake.items, newItem("c", "Kallax 2 puertas", 75, time.Minute, fake.photo("c")))
 	res = Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.listings) != 1 || !strings.HasSuffix(notify.listings[0], "Kallax 2 puertas") {
@@ -156,7 +146,6 @@ func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 	}
 }
 
-// The same advert reposted by another account from another town is announced once.
 func TestReposetdListingIsAnnouncedOnce(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}
@@ -167,7 +156,6 @@ func TestReposetdListingIsAnnouncedOnce(t *testing.T) {
 	notify := &recorder{}
 	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
-	// Both carry the same photograph, and the price barely moves.
 	first := newItem("m1", "YAMAHA XSR 900 (A2)", 8780, time.Minute, fake.photo("same"))
 	second := newItem("m2", "Yamaha XSR900 A2 impecable", 8800, time.Minute, fake.photo("same"))
 	fake.items = append(fake.items, first, second)
@@ -221,7 +209,6 @@ func TestLine(t *testing.T) {
 	}
 }
 
-// A listing already seen is not news, but the same thing cheaper than it has ever been is.
 func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}
@@ -234,7 +221,6 @@ func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 	notify := &recorder{}
 	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
-	// Down 8%: worth saying.
 	bike.Price.Amount = 8300
 	fake.items = []wallapop.SearchItem{bike}
 	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
@@ -245,13 +231,12 @@ func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 		t.Fatalf("res.Cheaper = %d", len(res.Cheaper))
 	}
 
-	// The same price again is the same news, and news is told once.
 	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.cheaper) != 1 {
 		t.Fatalf("the same drop was announced twice: %v", notify.cheaper)
 	}
 
-	// Back up and down again to where it already was: still the same news.
+	// Back up and down to a price already announced.
 	bike.Price.Amount = 9000
 	fake.items = []wallapop.SearchItem{bike}
 	Run(context.Background(), client, seen, searches, notify, opt, quiet())
@@ -283,8 +268,6 @@ func TestSmallDropIsNotWorthAMessage(t *testing.T) {
 	}
 }
 
-// Eleven accounts repricing one van is one piece of news, and it belongs to the listing
-// that was announced.
 func TestACopyDropsInSilence(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}
@@ -302,7 +285,6 @@ func TestACopyDropsInSilence(t *testing.T) {
 		t.Fatalf("the copy was not folded: %+v", res)
 	}
 
-	// Both drop, as a dealer network does.
 	first.Price.Amount = 7900
 	copyOf.Price.Amount = 7900
 	fake.items = []wallapop.SearchItem{first, copyOf}
@@ -316,8 +298,6 @@ func TestACopyDropsInSilence(t *testing.T) {
 	}
 }
 
-// A page is 40 listings and a search can hold more: the tail has to be read too, or
-// the listings in it are never seen to change price.
 func TestSearchFollowsTheCursor(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}
@@ -336,8 +316,6 @@ func TestSearchFollowsTheCursor(t *testing.T) {
 	}
 }
 
-// Between deep rounds only the first page is read: the search is ordered by newest, so
-// anything new is on it, and the other pages are requests for listings already known.
 func TestOnlyTheFirstPageIsReadBetweenDeepRounds(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}
@@ -365,8 +343,6 @@ func TestOnlyTheFirstPageIsReadBetweenDeepRounds(t *testing.T) {
 	}
 }
 
-// Two chats watching the same search cost one request, and each still hears about the
-// listing, because each has its own memory of what it has seen.
 func TestTheSameSearchIsAskedOncePerRound(t *testing.T) {
 	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
@@ -393,7 +369,6 @@ func TestTheSameSearchIsAskedOncePerRound(t *testing.T) {
 	}
 }
 
-// A shallow answer cannot stand in for a deep one: the chat that needs every page asks.
 func TestADeeperReadIsNotAnsweredByAShallowOne(t *testing.T) {
 	fake := &fakeWallapop{}
 	client, _ := newWatcher(t, fake)

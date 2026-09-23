@@ -17,19 +17,15 @@ import (
 )
 
 type Options struct {
-	// MaxAge is how recent a listing has to be to be worth a message. Anything older is
-	// recorded in silence: it was already there, the search just reached it.
-	MaxAge    time.Duration
-	MaxAlerts int
-	// PhotosPerItem is how many pictures of a new listing are hashed.
+	// Older listings are recorded in silence: they were already there.
+	MaxAge        time.Duration
+	MaxAlerts     int
 	PhotosPerItem int
-	// Pages of each search to read on a deep round, and on the first round of a search.
-	// Any other round reads one page of 40, which is where anything new shows up.
+	// Pages is read on a deep or first round; any other round reads one page of 40.
 	Pages   int
 	Deep    bool
 	SeenTTL time.Duration
-	// Drop is how much of its own lowest price a listing has to shed before the fall is
-	// worth a message, as a fraction. Zero says nothing about prices at all.
+	// Drop is a fraction of the lowest price; zero turns price drops off.
 	Drop   float64
 	DryRun bool
 }
@@ -40,11 +36,9 @@ type Search struct {
 	Query url.Values
 }
 
-// Notifier is what says a listing out loud. The whole search goes through because the
-// message carries a button to silence it, and that needs its id.
+// Notifier gets the whole search because the silence button needs its id.
 type Notifier interface {
 	Listing(ctx context.Context, search Search, item wallapop.SearchItem) error
-	// Cheaper is the same listing as before at a lower price.
 	Cheaper(ctx context.Context, search Search, item wallapop.SearchItem, before float64) error
 	Say(ctx context.Context, text string) error
 }
@@ -68,16 +62,14 @@ type Result struct {
 	Duration  time.Duration `json:"duration"`
 	DryRun    bool          `json:"dry_run,omitempty"`
 	Users     int           `json:"users"`
-	// Requests is how many searches went out to Wallapop, and Shared how many were
-	// answered by one that another chat had already asked for.
+	// Shared is how many searches were answered by another chat's identical request.
 	Requests int  `json:"requests"`
 	Shared   int  `json:"shared,omitempty"`
 	Deep     bool `json:"deep,omitempty"`
 	Watched  int  `json:"watched"`
 	Silenced int  `json:"silenced,omitempty"`
 	Scanned  int  `json:"scanned"`
-	// Seeded is what was recorded without a message: the first pass of a search, and
-	// listings already too old to be news.
+	// Seeded is recorded without a message: a first pass, or too old to be news.
 	Seeded     int       `json:"seeded"`
 	Duplicates int       `json:"duplicates"`
 	Cheaper    []Hit     `json:"cheaper,omitempty"`
@@ -87,7 +79,6 @@ type Result struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-// Merge adds one user's round to the whole: the round is one, the chats are several.
 func (r *Result) Merge(o Result) {
 	r.Users++
 	r.Watched += o.Watched
@@ -138,8 +129,7 @@ func (r Result) Summary() string {
 	return msg
 }
 
-// Run replays one user's searches against what that user has already seen, and
-// announces what is genuinely new in them. Pacing the requests is the searcher's business.
+// Run does one user's searches. Pacing the requests is the searcher's job.
 func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, notify Notifier, opt Options, log *slog.Logger) Result {
 	res := Result{StartedAt: time.Now(), DryRun: opt.DryRun, Deep: opt.Deep}
 	defer func() { res.Duration = time.Since(res.StartedAt).Round(time.Second) }()
@@ -166,13 +156,10 @@ func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, no
 		}
 		res.Scanned += len(items)
 
-		// Oldest first, so several listings arriving together reach Telegram in the order
-		// they were posted.
+		// Oldest first, so Telegram gets them in the order they were posted.
 		sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt < items[j].CreatedAt })
 
 		for _, item := range items {
-			// A listing already known is not news, but its price can be: the same thing
-			// cheaper than it has ever been is exactly what a watched search is for.
 			if seen.Known(item.ID) {
 				before, worth := seen.Cheaper(item, opt.Drop)
 				if opt.Drop <= 0 || !worth {
@@ -201,8 +188,7 @@ func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, no
 			if rec, reason, dup := seen.Duplicate(item, hashes); dup {
 				log.Info("duplicate", "title", item.Title, "of", rec.Title, "why", reason, "search", search.Name)
 				res.Duplicates++
-				// Marked as a copy of the one that was announced, which is what keeps its
-				// price drops quiet too.
+				// A copy of the announced one, so its price drops stay quiet too.
 				owner := rec.ID
 				if rec.CopyOf != "" {
 					owner = rec.CopyOf
@@ -234,8 +220,7 @@ func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, no
 		seen.MarkWatched(search.ID, now)
 	}
 
-	// A flood is capped rather than sent: a hundred messages in a row is not an alert, it
-	// is a reason to mute the bot.
+	// A flood is capped: a hundred messages in a row is a reason to mute the bot.
 	if res.Held > 0 && notify != nil && !opt.DryRun {
 		text := fmt.Sprintf("… y %d anuncios nuevos mas en esta ronda, sin mandar.", res.Held)
 		if err := notify.Say(ctx, text); err != nil {
@@ -264,7 +249,7 @@ func photoURLs(item wallapop.SearchItem) []string {
 	return urls
 }
 
-// Pause is a random wait, so the searches of a round do not go out like a metronome.
+// Pause is random so the requests do not go out like a metronome.
 func Pause(ctx context.Context, min, max time.Duration) error {
 	wait := min
 	if max > min {
@@ -278,7 +263,6 @@ func Pause(ctx context.Context, min, max time.Duration) error {
 	}
 }
 
-// Interval is the wait until the next round: never the same twice, which is the point.
 func Interval(min, max time.Duration) time.Duration {
 	if max <= min {
 		return min
@@ -306,8 +290,7 @@ func LoadResult(dir string) (Result, bool) {
 	return res, true
 }
 
-// Line is the message a listing gets. It is built here so the dry run prints exactly what
-// Telegram would receive.
+// Line is built here so the dry run prints exactly what Telegram would get.
 func Line(search string, item wallapop.SearchItem, escape func(string) string) string {
 	if escape == nil {
 		escape = func(s string) string { return s }
@@ -321,15 +304,12 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	if item.Reserved != nil && item.Reserved.Flag {
 		b.WriteString(" · <i>reservado</i>")
 	}
-	// The listing's own address hangs from a button instead of sitting in the text.
 	if search != "" {
 		fmt.Fprintf(&b, "\n<i>🔎 %s</i>", escape(search))
 	}
 	return b.String()
 }
 
-// CheaperLine is the message a price drop gets: the same card, with what it used to cost
-// and how much of it has gone.
 func CheaperLine(search string, item wallapop.SearchItem, before float64, escape func(string) string) string {
 	if escape == nil {
 		escape = func(s string) string { return s }
@@ -350,8 +330,6 @@ func CheaperLine(search string, item wallapop.SearchItem, before float64, escape
 	return b.String()
 }
 
-// Money writes a price the way it is read here: thousands separated by a dot, no decimals
-// when there are none.
 func Money(amount float64, currency string) string {
 	symbol := "€"
 	if currency != "" && currency != "EUR" {

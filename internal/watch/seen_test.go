@@ -38,13 +38,10 @@ func TestSimilarity(t *testing.T) {
 	}
 }
 
-// The case this exists for: one advert posted by several accounts from several towns at
-// almost the same price. The photograph is what gives it away.
 func TestDuplicateBySamePhoto(t *testing.T) {
 	seen, _ := LoadSeen(t.TempDir())
 	seen.Add(item("a", "seller-1", "YAMAHA XSR 900 (A2)", 8780, "Barcelona"), []uint64{0xdeadbeefcafe1234}, "motos", time.Now())
 
-	// A copy: another account, another town, a price nudged, the same picture.
 	copyOf := item("b", "seller-2", "Yamaha XSR900 A2 impecable", 8850, "Sevilla")
 	rec, reason, dup := seen.Duplicate(copyOf, []uint64{0xdeadbeefcafe1236})
 	if !dup {
@@ -55,8 +52,7 @@ func TestDuplicateBySamePhoto(t *testing.T) {
 	}
 }
 
-// Two strangers both using the maker's catalogue photo of the same white shelf are two
-// shelves. The price is what separates them from a reposted advert.
+// Strangers sharing the maker's catalogue photo are two shelves; the price tells them apart.
 func TestPhotoMatchNeedsAPlausiblePrice(t *testing.T) {
 	seen, _ := LoadSeen(t.TempDir())
 	seen.Add(item("a", "seller-1", "Estantería Kallax Ikea blanca", 16, "Madrid"), []uint64{0x0f0f0f0f0f0f0f0f}, "kallax", time.Now())
@@ -71,13 +67,12 @@ func TestWordsOnlyFoldTheSameSeller(t *testing.T) {
 	seen, _ := LoadSeen(t.TempDir())
 	seen.Add(item("a", "seller-1", "Estantería Kallax Ikea", 40, "Sant Just"), nil, "kallax", time.Now())
 
-	// Same seller, listing rewritten and repriced: his own thing again.
 	his := item("b", "seller-1", "Estantería Kallax Ikea 2 puertas", 45, "Sant Just")
 	if _, reason, dup := seen.Duplicate(his, nil); !dup || reason != "same seller, listing rewritten" {
 		t.Fatalf("a seller reposting his own listing was not caught (%q)", reason)
 	}
 
-	// Word for word the same, from somebody else: a second identical shelf, not a copy.
+	// Same words from somebody else is a second shelf, not a copy.
 	hers := item("c", "seller-2", "Estantería Kallax Ikea", 40, "Madrid")
 	if _, _, dup := seen.Duplicate(hers, nil); dup {
 		t.Fatal("two sellers with the same mass-produced thing were folded into one")

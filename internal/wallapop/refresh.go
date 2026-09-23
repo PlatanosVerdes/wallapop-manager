@@ -10,34 +10,28 @@ import (
 	"time"
 )
 
-// Renewing a session never touches Keycloak, which is why a browser doing it produces no
-// traffic to accounts.wallapop.com. The web app is a NextAuth app: the refresh token is
-// encrypted inside the session cookie and only its own server can read it, so the way to
-// get a fresh access token is to ask that server for the session, exactly as the page
-// does through getSession().
+// The refresh token is encrypted in the NextAuth cookie, so a fresh access token comes from
+// asking the web server for the session, as getSession() does.
 const (
 	DefaultWebURL = "https://es.wallapop.com"
 	PathSession   = "/api/auth/session"
 )
 
 const (
-	// headerUnauthorized says which half expired, which is the difference between
-	// retrying and waking a human.
+	// headerUnauthorized says which token expired: retry, or wake a human.
 	headerUnauthorized = "x-wallapop-unauthorized"
 
 	reasonAccessExpired  = "ACCESS_TOKEN_EXPIRED"
 	reasonRefreshExpired = "REFRESH_TOKEN_EXPIRED"
 )
 
-// TokenSource is the session the client reads and renews. session.Store implements it.
 type TokenSource interface {
 	AccessToken() string
 	SessionCookie() (name, value string)
 	Update(access, cookie string, expires time.Time) error
 }
 
-// RenewSession mints a fresh access token from the session cookie. The cookie rolls on
-// every read, so a rotated one is stored back and the session outlives any single token.
+// RenewSession stores the cookie back: it rotates on every read.
 func (c *Client) RenewSession(ctx context.Context) error {
 	name, value := c.Session.SessionCookie()
 	if value == "" {
@@ -96,7 +90,6 @@ func rolledCookie(cookies []*http.Cookie, name string) string {
 	return ""
 }
 
-// classify turns a rejected response into the two cases that matter.
 func classify(status int, header http.Header, path string, body []byte) error {
 	reason := header.Get(headerUnauthorized)
 	switch {

@@ -1,6 +1,4 @@
-// Package session keeps the browser session on disk. It is the one thing here that
-// cannot be regenerated without a human: it is imported once from the browser and read
-// on every run.
+// Package session keeps the browser session on disk; only a human can replace it.
 package session
 
 import (
@@ -17,13 +15,12 @@ import (
 
 var ErrMissing = errors.New("session: no session imported yet")
 
-// DefaultCookieName is the NextAuth session cookie. Its value is encrypted and holds the
-// refresh token, which is why the browser itself never sees one.
+// The NextAuth cookie is encrypted and holds the refresh token, so the browser never sees one.
 const DefaultCookieName = "__Secure-next-auth.session-token"
 
 type Session struct {
+	CookieName string `json:"cookie_name"`
 	// CookieValue is the durable half: access tokens are minted from it.
-	CookieName  string `json:"cookie_name"`
 	CookieValue string `json:"cookie_value"`
 	AccessToken string `json:"access_token,omitempty"`
 
@@ -32,13 +29,10 @@ type Session struct {
 
 	ImportedAt time.Time `json:"imported_at"`
 	RenewedAt  time.Time `json:"renewed_at,omitempty"`
-	// Expires is what the session endpoint reports: the deadline past which a human has
-	// to import a new cookie.
+	// After Expires a human has to import a new cookie.
 	Expires time.Time `json:"expires,omitempty"`
 }
 
-// Store serialises reads and writes so the HTTP handler and the ticker can share one
-// session file.
 type Store struct {
 	path string
 	mu   sync.RWMutex
@@ -98,7 +92,6 @@ func (s *Store) Save(sess *Session) error {
 	return nil
 }
 
-// AccessToken, SessionCookie and Update are what wallapop.Client renews through.
 func (s *Store) AccessToken() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -117,8 +110,7 @@ func (s *Store) SessionCookie() (string, string) {
 	return s.cur.CookieName, s.cur.CookieValue
 }
 
-// Update stores what a renewal returned. The cookie rolls on every read, so a new value
-// replaces the stored one and the session stays alive as long as passes keep happening.
+// The cookie rolls on every read, so the session lives as long as passes keep happening.
 func (s *Store) Update(access, cookie string, expires time.Time) error {
 	s.mu.RLock()
 	cur := s.cur
@@ -140,8 +132,7 @@ func (s *Store) Update(access, cookie string, expires time.Time) error {
 	return s.Save(&next)
 }
 
-// AccessSpent says whether renewing first would save a rejected request. An unreadable
-// token is left to the API to judge.
+// An unreadable token is left to the API to judge.
 func (s *Store) AccessSpent() bool {
 	s.mu.RLock()
 	cur := s.cur
@@ -159,9 +150,7 @@ func (s *Store) Current() *Session {
 	return s.cur
 }
 
-// Claims are the fields of the access token this service reads. The token is not ours to
-// validate, only to read: device_id is echoed back as the x-deviceid header, and exp says
-// whether renewing first is worth it.
+// The token is read, never validated: device_id goes back as x-deviceid, exp says when to renew.
 type Claims struct {
 	Exp      int64  `json:"exp"`
 	Iat      int64  `json:"iat"`
@@ -204,7 +193,6 @@ func (s *Session) TimeLeft() (time.Duration, bool) {
 	return time.Until(exp), true
 }
 
-// Renewable is how long the session can keep minting access tokens unattended.
 func (s *Session) Renewable() (time.Duration, bool) {
 	if s.Expires.IsZero() {
 		return 0, false
@@ -212,8 +200,7 @@ func (s *Session) Renewable() (time.Duration, bool) {
 	return time.Until(s.Expires), true
 }
 
-// Device returns the device id to send with every call: the stored one wins, and the
-// token claim covers a session whose cookie was imported on its own.
+// The token claim covers a session whose cookie was imported on its own.
 func (s *Session) Device() string {
 	if s.DeviceID != "" {
 		return s.DeviceID
@@ -224,7 +211,6 @@ func (s *Session) Device() string {
 	return ""
 }
 
-// New builds a session from the NextAuth cookie, which is all the browser can give.
 func New(cookieValue string) *Session {
 	return &Session{
 		CookieName:  DefaultCookieName,
@@ -233,8 +219,7 @@ func New(cookieValue string) *Session {
 	}
 }
 
-// Parse accepts the cookie value on its own, a name=value pair copied from DevTools, or a
-// JSON object naming it.
+// Parse accepts the bare value, a name=value pair from DevTools, or a JSON object.
 func Parse(input string) (*Session, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
