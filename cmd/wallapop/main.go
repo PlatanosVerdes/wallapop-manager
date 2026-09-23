@@ -231,7 +231,7 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 	}()
 
 	if bot := telegram.New(cfg.TelegramToken, cfg.TelegramChat); bot.Enabled() {
-		b := &botState{cfg: cfg, people: people, log: log}
+		b := &botState{cfg: cfg, people: people, log: log, bot: bot}
 		listener := &commands.Listener{
 			Bot:      bot,
 			Allowed:  people.IsActive,

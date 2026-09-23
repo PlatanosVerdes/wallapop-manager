@@ -241,6 +241,26 @@ func (s *Store) Delete(chat, id string) (Search, error) {
 	return Search{}, ErrNoSuchSearch
 }
 
+// RenameSearch gives a search the name its messages call it by.
+func (s *Store) RenameSearch(chat, id, name string) (Search, error) {
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return Search{}, err
+	}
+	defer s.mu.Unlock()
+	user, ok := s.users[chat]
+	if !ok {
+		return Search{}, ErrUnknown
+	}
+	for i := range user.Searches {
+		if user.Searches[i].ID == id {
+			user.Searches[i].Name = name
+			return user.Searches[i], s.save()
+		}
+	}
+	return Search{}, ErrNoSuchSearch
+}
+
 // SetMuted switches a search off or back on, and answers it in its new position.
 func (s *Store) SetMuted(chat, id string, muted bool) (Search, error) {
 	if err := s.lock(); err != nil {
