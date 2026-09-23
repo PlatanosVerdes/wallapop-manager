@@ -6,7 +6,7 @@ pinned to the CalVer tag that `auto-tag.yml` creates on every push to main.
 Entry for its `docker-compose.yml`:
 
 ```yaml
-  # --- Wallapop: reactivar anuncios caducados y vigilar las busquedas guardadas ---
+  # --- Wallapop: reactivate expired listings daily, and the searches bot ---
   wallapop-manager:
     build:
       context: https://github.com/PlatanosVerdes/wallapop-manager.git#${WALLAPOP_VERSION}
@@ -26,12 +26,13 @@ Entry for its `docker-compose.yml`:
       - media-network
     environment:
       TZ: ${TZ:-Europe/Madrid}
-      # State is a metric; Telegram carries only the listings that have just appeared.
       WALLA_PUSHGATEWAY: http://pushgateway:9091
+      # A bot of its own: this service is the only reader of its updates.
       WALLA_TELEGRAM_TOKEN: ${WALLA_TELEGRAM_TOKEN}
+      # The owner, who approves everybody else.
       WALLA_TELEGRAM_CHAT: ${WALLA_TELEGRAM_CHAT}
     volumes:
-      # The session lives here, and so does what has already been seen.
+      # The session, the users and what has been seen for each of them.
       - ${APP_CONFIG_PATH}/wallapop-manager:/data
 ```
 
@@ -46,13 +47,14 @@ docker exec wallapop-manager wallapop session show
 
 The import renews once before reporting success, so it doubles as the check.
 
-What is being watched, and a round without waiting for the clock:
+Who uses the bot and what they look for, and a round without waiting for the clock:
 
 ```bash
 docker exec wallapop-manager wallapop searches
+docker exec wallapop-manager wallapop searches add --chat <id> '<address of a web search>'
 docker exec wallapop-manager wallapop watch --dry-run
 docker exec wallapop-manager wallapop run --dry-run
 ```
 
-Searches are added, removed and switched on or off in the Wallapop app. Nothing here
-writes to the account.
+Searches live in `users.json` and are added, silenced and deleted from the bot. Nothing
+in the watcher writes to, or even reads, the Wallapop account.

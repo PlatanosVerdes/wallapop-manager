@@ -1,10 +1,5 @@
-// Package commands is the ear of the bot: it owns the updates, ignores everybody who is
-// not the owner of the chat, and answers the handful of questions worth asking from the
-// phone.
-//
-// Names are prefixed on purpose. The command menu belongs to the bot and not to this
-// service, so the day another one joins, its commands sit next to these without a clash
-// and without renaming anything here.
+// Package commands is the ear of the bot: it owns the updates, lets through the chats the
+// gate knows, and answers the handful of questions worth asking from the phone.
 package commands
 
 import (
@@ -19,19 +14,22 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
 )
 
-// Prefix is the service's corner of a shared bot: commands are wp_something, and the data
-// a button sends back starts with wp:. Anything else belongs to another service.
-const (
-	Prefix     = "wp_"
-	DataPrefix = "wp:"
-)
-
 type Command struct {
-	// Name carries the prefix and no slash: "wp_status".
+	// Name has no slash: "estado".
 	Name string
 	Help string
-	Run  func(ctx context.Context) (Reply, error)
+	// Open commands answer anybody. The rest answer only the chats the gate lets in.
+	Open bool
+	Run  func(ctx context.Context, req Request) (Reply, error)
 }
+
+// Request is who asked, and whatever was written after the command.
+type Request struct {
+	Chat telegram.Chat
+	Args string
+}
+
+func (r Request) ChatID() string { return strconv.FormatInt(r.Chat.ID, 10) }
 
 // Reply is what a command answers. Text is HTML, because a message read on a phone needs
 // weight and not columns: whoever builds it escapes what came from a stranger.
@@ -44,13 +42,15 @@ func Say(text string) Reply { return Reply{Text: text} }
 
 type Listener struct {
 	Bot *telegram.Bot
-	// Chat is the only conversation obeyed. A bot is public: anybody who finds it can
-	// write to it, and nobody else gets an answer.
-	Chat     string
+	// Allowed is the gate. A bot is public: anybody who finds it can write to it, and only
+	// the chats this lets through get more than the open commands.
+	Allowed  func(chat string) bool
 	Commands []Command
+	// OnText answers a message from an allowed chat that is not a command.
+	OnText func(ctx context.Context, req Request) (Reply, error)
 	// OnButton answers a press. The notice is the banner raised on the phone, and a
 	// keyboard that comes back redraws the one that was pressed.
-	OnButton func(ctx context.Context, data string) (notice string, keys *telegram.Keyboard, err error)
+	OnButton func(ctx context.Context, chat, data string) (notice string, keys *telegram.Keyboard, err error)
 	Log      *slog.Logger
 	// Backoff is the wait after a failed poll.
 	Backoff time.Duration
@@ -126,63 +126,79 @@ func (l *Listener) menu() []telegram.Command {
 	return menu
 }
 
-func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
-	if strconv.FormatInt(msg.Chat.ID, 10) != l.Chat {
-		l.Log.Warn("a message from another chat was ignored", "chat", msg.Chat.ID)
-		return
-	}
+func (l *Listener) allowed(chat string) bool { return l.Allowed != nil && l.Allowed(chat) }
 
-	name := parse(msg.Text)
-	if name == "" {
-		return
-	}
+func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
+	chat := strconv.FormatInt(msg.Chat.ID, 10)
+	name, args := parse(msg.Text)
+	req := Request{Chat: msg.Chat, Args: args}
+
 	// The lag is worth a number: what is felt as a slow bot is usually a command sent
 	// while the container was being replaced.
 	lag := time.Duration(0)
 	if msg.Date > 0 {
 		lag = time.Since(time.Unix(msg.Date, 0)).Round(time.Second)
 		if lag > l.StaleAfter {
-			l.Log.Info("stale command dropped", "name", name, "lag", lag)
+			l.Log.Info("stale message dropped", "name", name, "lag", lag)
 			return
 		}
 	}
+
+	if name == "" {
+		if l.OnText == nil || !l.allowed(chat) {
+			return
+		}
+		l.answer(ctx, chat, "text", func() (Reply, error) { return l.OnText(ctx, req) })
+		return
+	}
+
 	for _, cmd := range l.Commands {
 		if cmd.Name != name {
 			continue
 		}
-		l.Log.Info("command", "name", name, "lag", lag)
-		reply, err := cmd.Run(ctx)
-		if err != nil {
-			reply = Reply{Text: "⚠️ no ha podido ser: " + telegram.Escape(err.Error())}
+		if !cmd.Open && !l.allowed(chat) {
+			l.Log.Warn("a command from a chat not let in was ignored", "chat", chat, "name", name)
+			return
 		}
-		if err := l.Bot.Text(ctx, reply.Text, reply.Keys); err != nil {
-			l.Log.Error("could not answer", "command", name, "err", err)
-		}
+		l.Log.Info("command", "name", name, "chat", chat, "lag", lag)
+		l.answer(ctx, chat, name, func() (Reply, error) { return cmd.Run(ctx, req) })
 		return
 	}
-
-	// Anything else belongs to somebody else, or to nobody. Answering it would make a
-	// shared bot argue with itself.
-	if strings.HasPrefix(name, Prefix) {
+	if l.allowed(chat) {
 		l.Log.Info("unknown command", "name", name)
+		_ = l.Bot.To(chat).Text(ctx, "No conozco ese comando. /ayuda", nil)
+	}
+}
+
+func (l *Listener) answer(ctx context.Context, chat, what string, run func() (Reply, error)) {
+	reply, err := run()
+	if err != nil {
+		reply = Reply{Text: "⚠️ no ha podido ser: " + telegram.Escape(err.Error())}
+	}
+	if reply.Text == "" {
+		return
+	}
+	if err := l.Bot.To(chat).Text(ctx, reply.Text, reply.Keys); err != nil {
+		l.Log.Error("could not answer", "what", what, "chat", chat, "err", err)
 	}
 }
 
 // press deals with a button. Telegram leaves the phone spinning until the query is
 // answered, so every path out of here answers it.
 func (l *Listener) press(ctx context.Context, query telegram.CallbackQuery) {
-	if query.Message == nil || strconv.FormatInt(query.Message.Chat.ID, 10) != l.Chat {
-		l.Log.Warn("a button press from another chat was ignored")
+	if query.Message == nil || !l.allowed(strconv.FormatInt(query.Message.Chat.ID, 10)) {
+		l.Log.Warn("a button press from a chat not let in was ignored")
 		_ = l.Bot.Answer(ctx, query.ID, "")
 		return
 	}
-	if !strings.HasPrefix(query.Data, DataPrefix) || l.OnButton == nil {
+	if l.OnButton == nil {
 		_ = l.Bot.Answer(ctx, query.ID, "")
 		return
 	}
 
-	l.Log.Info("button", "data", query.Data)
-	notice, keys, err := l.OnButton(ctx, query.Data)
+	chat := strconv.FormatInt(query.Message.Chat.ID, 10)
+	l.Log.Info("button", "data", query.Data, "chat", chat)
+	notice, keys, err := l.OnButton(ctx, chat, query.Data)
 	if err != nil {
 		notice = "no ha podido ser: " + err.Error()
 	}
@@ -190,24 +206,26 @@ func (l *Listener) press(ctx context.Context, query telegram.CallbackQuery) {
 		l.Log.Error("could not close the button press", "err", err)
 	}
 	if err == nil && keys != nil {
-		if err := l.Bot.EditKeys(ctx, query.Message.MessageID, keys); err != nil {
+		if err := l.Bot.To(chat).EditKeys(ctx, query.Message.MessageID, keys); err != nil {
 			l.Log.Error("could not redraw the buttons", "err", err)
 		}
 	}
 }
 
 // parse pulls the command out of a message: the first word, without the slash and without
-// the @bot suffix a group chat adds.
-func parse(text string) string {
+// the @bot suffix a group chat adds, and the rest as its arguments. A message that is not a
+// command comes back whole as the arguments.
+func parse(text string) (name, args string) {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "/") {
-		return ""
+		return "", text
 	}
-	name := strings.Fields(text)[0][1:]
+	first, rest, _ := strings.Cut(text, " ")
+	name = first[1:]
 	if at := strings.IndexByte(name, '@'); at >= 0 {
 		name = name[:at]
 	}
-	return strings.ToLower(name)
+	return strings.ToLower(name), strings.TrimSpace(rest)
 }
 
 // Help is the answer to the help command, built from the table so it cannot drift from it.

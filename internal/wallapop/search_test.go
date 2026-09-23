@@ -1,69 +1,64 @@
 package wallapop
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-// Shaped like the real answer: the query carries Wallapop's own parameter names, numbers
-// come back as JSON numbers, and the alert is the switch shown in the app.
-const savedSearchesFixture = `[
-  {"id": "c6ae82bf", "title": "Motos",
-   "query": {"latitude": 41.383, "longitude": 2.134, "category_id": "14000",
-             "order_by": "closest", "country_code": "ES", "brand": "Yamaha",
-             "model": "XSR 900", "min_year": 2022, "saved_search_id": "c6ae82bf"},
-   "alert": {"enabled": true, "hits": 0, "distance": 10000},
-   "location_label": "08028 Barcelona"},
-  {"id": "eeee9d73", "title": "kallax",
-   "query": {"keywords": "kallax", "max_sale_price": 200.0, "distance_in_km": 1},
-   "alert": {"enabled": false},
-   "location_label": "08028 Barcelona"}
-]`
-
-func TestDecodeSearches(t *testing.T) {
-	searches, err := decodeSearches([]byte(savedSearchesFixture))
+func TestFromWebURL(t *testing.T) {
+	query, err := FromWebURL("https://es.wallapop.com/search?brand=Yamaha&category_id=14000&model=XSR+900" +
+		"&min_year=2022&latitude=41.38&longitude=2.13&distance=10000&distance_in_km=50" +
+		"&order_by=most_relevance&source=search_box&filters_source=quick_filters")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(searches) != 2 {
-		t.Fatalf("expected 2 searches, got %d", len(searches))
-	}
-	if !searches[0].Alert.Enabled || searches[1].Alert.Enabled {
-		t.Error("the alert switch did not decode")
-	}
-	if searches[0].Name() != "Motos" {
-		t.Errorf("name = %q", searches[0].Name())
-	}
-}
-
-func TestSavedSearchValues(t *testing.T) {
-	searches, err := decodeSearches([]byte(savedSearchesFixture))
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := searches[0].Values()
-
-	// Newest is the whole point: the round is about what has just appeared.
 	if got := query.Get("order_by"); got != "newest" {
 		t.Errorf("order_by = %q, expected newest", got)
 	}
-	if query.Has("saved_search_id") {
-		t.Error("the bookkeeping id was sent to the search endpoint")
-	}
-	// A whole number must not arrive as 2022.000000.
-	if got := query.Get("min_year"); got != "2022" {
-		t.Errorf("min_year = %q", got)
-	}
-	if got := query.Get("distance"); got != "10000" {
-		t.Errorf("distance = %q, expected the alert's own radius", got)
+	// Without source the API answers 400.
+	if got := query.Get("source"); got == "" {
+		t.Error("the query went out without a source")
 	}
 	if got := query.Get("model"); got != "XSR 900" {
 		t.Errorf("model = %q", got)
 	}
-
-	second := searches[1].Values()
-	if got := second.Get("max_sale_price"); got != "200" {
-		t.Errorf("max_sale_price = %q", got)
+	for _, key := range []string{"distance", "filters_source"} {
+		if query.Has(key) {
+			t.Errorf("%s was kept", key)
+		}
 	}
-	if second.Has("distance") {
-		t.Error("a search with no alert radius was given one")
+	if got := RadiusKm(query); got != "50" {
+		t.Errorf("radius = %q, expected 50", got)
+	}
+}
+
+func TestFromWebURLRefusesWhatIsNotASearch(t *testing.T) {
+	for _, raw := range []string{
+		"hola",
+		"https://es.wallapop.com/item/yamaha-xsr-900-2024-1304957296",
+		"https://evil.example/search?keywords=kallax",
+		"https://wallapop.com.evil.example/search?keywords=kallax",
+	} {
+		if _, err := FromWebURL(raw); !errors.Is(err, ErrNotASearch) {
+			t.Errorf("FromWebURL(%q) = %v, expected ErrNotASearch", raw, err)
+		}
+	}
+	if _, err := FromWebURL("https://es.wallapop.com/search?latitude=41.38&longitude=2.13"); !errors.Is(err, ErrNoFilter) {
+		t.Errorf("a search with no filter was accepted: %v", err)
+	}
+	if _, err := FromWebURL("https://es.wallapop.com/app/search?keywords=kallax"); err != nil {
+		t.Errorf("the old address was refused: %v", err)
+	}
+}
+
+// A radius needs a point to be measured from, and without one the API covers the country.
+func TestRadiusNeedsAPoint(t *testing.T) {
+	query, err := FromWebURL("https://es.wallapop.com/search?keywords=kallax&distance_in_km=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RadiusKm(query); got != "" {
+		t.Errorf("radius = %q without coordinates", got)
 	}
 }
 

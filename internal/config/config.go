@@ -33,19 +33,23 @@ type Config struct {
 	Pushgateway string
 	WarnBefore  time.Duration
 
-	// The watcher: the saved searches, and what it is allowed to say.
+	// The watcher: the bot, the users' searches, and what it is allowed to say.
 	TelegramToken string
-	TelegramChat  string
-	WatchMin      time.Duration
-	WatchMax      time.Duration
-	// WatchAll follows every saved search instead of only the ones whose alert is on in
-	// the app.
-	WatchAll       bool
+	// TelegramChat is the owner's chat: it approves who joins, and it is the only one told
+	// about the catalogue and the session.
+	TelegramChat string
+	// MaxSearches is how many searches one chat may keep.
+	MaxSearches    int
+	WatchMin       time.Duration
+	WatchMax       time.Duration
 	WatchMaxAge    time.Duration
 	WatchMaxAlerts int
 	WatchPhotos    int
-	// SearchPages is how many pages of each saved search are read. One page is 40.
+	// SearchPages is how many pages of each search a deep round reads. One page is 40.
 	SearchPages int
+	// DeepEvery is how often a round reads every page instead of the first one, which is
+	// what keeps the prices further down a search watched.
+	DeepEvery time.Duration
 	// WatchDrop is the share of its own lowest price a listing has to shed before the
 	// fall is worth a message. Zero says nothing about prices.
 	WatchDrop     float64
@@ -75,13 +79,14 @@ func Load() (Config, error) {
 
 		TelegramToken:  env("WALLA_TELEGRAM_TOKEN", ""),
 		TelegramChat:   env("WALLA_TELEGRAM_CHAT", ""),
+		MaxSearches:    number("WALLA_MAX_SEARCHES", 3),
 		WatchMin:       duration("WALLA_WATCH_MIN", 5*time.Minute),
 		WatchMax:       duration("WALLA_WATCH_MAX", 15*time.Minute),
-		WatchAll:       env("WALLA_WATCH_ALL", "") == "1",
 		WatchMaxAge:    duration("WALLA_WATCH_MAX_AGE", 24*time.Hour),
 		WatchMaxAlerts: number("WALLA_WATCH_MAX_ALERTS", 10),
 		WatchPhotos:    number("WALLA_WATCH_PHOTOS", 2),
 		SearchPages:    number("WALLA_SEARCH_PAGES", 3),
+		DeepEvery:      duration("WALLA_DEEP_EVERY", time.Hour),
 		WatchDrop:      percent("WALLA_WATCH_DROP", 5) / 100,
 		WatchMinPause:  duration("WALLA_WATCH_MIN_PAUSE", 3*time.Second),
 		WatchMaxPause:  duration("WALLA_WATCH_MAX_PAUSE", 15*time.Second),
@@ -126,9 +131,6 @@ func Load() (Config, error) {
 	}
 	if v := os.Getenv("WALLA_PATH_SEARCH"); v != "" {
 		wallapop.PathSearch = v
-	}
-	if v := os.Getenv("WALLA_PATH_SAVED_SEARCHES"); v != "" {
-		wallapop.PathSavedSearches = v
 	}
 
 	return cfg, nil

@@ -1,5 +1,4 @@
-// Package telegram carries the one thing this service is asked to say out loud: a listing
-// has just appeared. Everything else it knows is a metric.
+// Package telegram is the bot: listings going out to each chat, and commands coming in.
 package telegram
 
 import (
@@ -46,6 +45,13 @@ func New(token, chat string) *Bot {
 const pollSeconds = 30
 
 func (b *Bot) Enabled() bool { return b != nil && b.Token != "" && b.Chat != "" }
+
+// To is the same bot talking to another chat.
+func (b *Bot) To(chat string) *Bot {
+	other := *b
+	other.Chat = chat
+	return &other
+}
 
 // Photo sends the picture with the text under it, and falls back to the text alone when
 // Telegram will not take the image: a listing is worth sending without its photo.
@@ -119,8 +125,30 @@ func Escape(s string) string {
 // sharing this bot may only send.
 
 type Chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Username  string `json:"username"`
+}
+
+// Name is how a chat is introduced to a person: the group's title, or who is writing.
+func (c Chat) Name() string {
+	name := c.Title
+	if name == "" {
+		name = strings.TrimSpace(c.FirstName + " " + c.LastName)
+	}
+	if c.Username != "" {
+		if name == "" {
+			return "@" + c.Username
+		}
+		name += " (@" + c.Username + ")"
+	}
+	if name == "" {
+		return strconv.FormatInt(c.ID, 10)
+	}
+	return name
 }
 
 type Message struct {
