@@ -204,7 +204,7 @@ func (s *Store) Add(chat, name, place string, query url.Values, limit int, now t
 		}
 	}
 	if limit > 0 && len(user.Searches) >= limit {
-		return Search{}, fmt.Errorf("%w (%d)", ErrTooMany, limit)
+		return Search{}, fmt.Errorf("%w (%d), borra alguna en /busquedas", ErrTooMany, limit)
 	}
 	search := Search{ID: newID(), Name: name, Place: place, Query: encoded, Added: now}
 	user.Searches = append(user.Searches, search)
