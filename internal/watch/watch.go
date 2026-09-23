@@ -25,10 +25,9 @@ type Options struct {
 	PhotosPerItem int
 	// Pages of each search to read on a deep round, and on the first round of a search.
 	// Any other round reads one page of 40, which is where anything new shows up.
-	Pages              int
-	Deep               bool
-	SeenTTL            time.Duration
-	MinPause, MaxPause time.Duration
+	Pages   int
+	Deep    bool
+	SeenTTL time.Duration
 	// Drop is how much of its own lowest price a listing has to shed before the fall is
 	// worth a message, as a fraction. Zero says nothing about prices at all.
 	Drop   float64
@@ -69,10 +68,14 @@ type Result struct {
 	Duration  time.Duration `json:"duration"`
 	DryRun    bool          `json:"dry_run,omitempty"`
 	Users     int           `json:"users"`
-	Deep      bool          `json:"deep,omitempty"`
-	Watched   int           `json:"watched"`
-	Silenced  int           `json:"silenced,omitempty"`
-	Scanned   int           `json:"scanned"`
+	// Requests is how many searches went out to Wallapop, and Shared how many were
+	// answered by one that another chat had already asked for.
+	Requests int  `json:"requests"`
+	Shared   int  `json:"shared,omitempty"`
+	Deep     bool `json:"deep,omitempty"`
+	Watched  int  `json:"watched"`
+	Silenced int  `json:"silenced,omitempty"`
+	Scanned  int  `json:"scanned"`
 	// Seeded is what was recorded without a message: the first pass of a search, and
 	// listings already too old to be news.
 	Seeded     int       `json:"seeded"`
@@ -108,6 +111,12 @@ func (r Result) Summary() string {
 		return "wallapop: la ronda de busquedas ha fallado: " + r.Error
 	}
 	msg := fmt.Sprintf("wallapop: %d usuarios, %d busquedas, %d anuncios mirados, %d nuevos", r.Users, r.Watched, r.Scanned, len(r.New))
+	if r.Requests > 0 {
+		msg += fmt.Sprintf(", %d peticiones", r.Requests)
+		if r.Shared > 0 {
+			msg += fmt.Sprintf(" (%d compartidas)", r.Shared)
+		}
+	}
 	if len(r.Cheaper) > 0 {
 		msg += fmt.Sprintf(", %d mas baratos", len(r.Cheaper))
 	}
@@ -130,8 +139,8 @@ func (r Result) Summary() string {
 }
 
 // Run replays one user's searches against what that user has already seen, and
-// announces what is genuinely new in them. The pause between searches is the caller's.
-func Run(ctx context.Context, client *wallapop.Client, seen *Seen, searches []Search, notify Notifier, opt Options, log *slog.Logger) Result {
+// announces what is genuinely new in them. Pacing the requests is the searcher's business.
+func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, notify Notifier, opt Options, log *slog.Logger) Result {
 	res := Result{StartedAt: time.Now(), DryRun: opt.DryRun, Deep: opt.Deep}
 	defer func() { res.Duration = time.Since(res.StartedAt).Round(time.Second) }()
 
@@ -139,11 +148,9 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, searches []Se
 	now := time.Now()
 	for _, search := range searches {
 		res.Watched++
-		if res.Watched > 1 {
-			if err := Pause(ctx, opt.MinPause, opt.MaxPause); err != nil {
-				res.Error = err.Error()
-				break
-			}
+		if err := ctx.Err(); err != nil {
+			res.Error = err.Error()
+			break
 		}
 
 		firstPass := !seen.Watched(search.ID)

@@ -231,11 +231,7 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 	}()
 
 	if bot := telegram.New(cfg.TelegramToken, cfg.TelegramChat); bot.Enabled() {
-		b := &botState{
-			cfg: cfg, store: store, people: people, log: log, bot: bot,
-			nextWatch: func() time.Time { return time.Unix(nextWatch.Load(), 0) },
-			nextRun:   func() time.Time { return time.Unix(next.Load(), 0) },
-		}
+		b := &botState{cfg: cfg, people: people, log: log}
 		listener := &commands.Listener{
 			Bot:      bot,
 			Allowed:  people.IsActive,
@@ -264,8 +260,8 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// loadUsers reads who uses the bot, and makes sure the owner is one of them: the owner is
-// the one who approves everybody else, so nobody would be left to approve the owner.
+// loadUsers reads who uses the bot, and makes sure the owner is one of them: what was seen
+// before the bot had users was the owner's, and it moves into the owner's folder.
 func loadUsers(cfg config.Config, log *slog.Logger) (*users.Store, error) {
 	people, err := users.Load(cfg.DataDir)
 	if err != nil {
@@ -351,7 +347,7 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 	for _, user := range people.All() {
 		state := "active"
 		if !user.Active {
-			state = "waiting for approval"
+			state = "inactive"
 		}
 		fmt.Printf("%s  %s  (%s, %d searches)\n", user.Chat, user.Name, state, len(user.Searches))
 		for _, search := range user.Searches {
@@ -416,8 +412,6 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		MaxAlerts:     cfg.WatchMaxAlerts,
 		PhotosPerItem: cfg.WatchPhotos,
 		SeenTTL:       cfg.SeenTTL,
-		MinPause:      cfg.WatchMinPause,
-		MaxPause:      cfg.WatchMaxPause,
 		Drop:          cfg.WatchDrop,
 		Pages:         cfg.SearchPages,
 		Deep:          r.Deep,
@@ -429,7 +423,8 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		log.Warn("no telegram configured, so nothing will be announced")
 	}
 	// The searches are public and need no session: nothing here is signed as the owner.
-	client := newClient(cfg, session.NewStore(cfg.DataDir))
+	// One catalogue for the whole round, so a search two friends share is asked once.
+	catalogue := watch.NewCatalogue(newClient(cfg, session.NewStore(cfg.DataDir)), cfg.WatchMinPause, cfg.WatchMaxPause)
 
 	total := watch.Result{StartedAt: time.Now(), DryRun: r.DryRun, Deep: r.Deep}
 	for _, user := range people.Active() {
@@ -448,12 +443,6 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		if len(searches) == 0 {
 			total.Merge(watch.Result{Silenced: silenced})
 			continue
-		}
-		if total.Watched > 0 {
-			if err := watch.Pause(ctx, opt.MinPause, opt.MaxPause); err != nil {
-				total.Error = err.Error()
-				break
-			}
 		}
 
 		dir := userDir(cfg, user.Chat)
@@ -476,7 +465,7 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 		case bot.Enabled():
 			notify = &messenger{bot: bot.To(user.Chat)}
 		}
-		res := watch.Run(ctx, client, seen, searches, notify, opt, log)
+		res := watch.Run(ctx, catalogue, seen, searches, notify, opt, log)
 		res.Silenced = silenced
 		for i := range res.New {
 			res.New[i].Chat = user.Chat
@@ -485,7 +474,11 @@ func runWatch(ctx context.Context, cfg config.Config, people *users.Store, log *
 			res.Cheaper[i].Chat = user.Chat
 		}
 		total.Merge(res)
+		if ctx.Err() != nil {
+			break
+		}
 	}
+	total.Requests, total.Shared = catalogue.Requests, catalogue.Shared
 	total.Duration = time.Since(total.StartedAt).Round(time.Second)
 
 	if !r.DryRun && r.Chat == "" {
@@ -628,6 +621,8 @@ func pushWatch(ctx context.Context, cfg config.Config, res watch.Result) error {
 		{Name: "wallapop_watch_timestamp", Help: "Unix time of the last round of searches", Value: float64(time.Now().Unix())},
 		{Name: "wallapop_watch_users", Help: "Active chats in the last round", Value: float64(res.Users)},
 		{Name: "wallapop_watch_searches", Help: "Searches watched in the last round", Value: float64(res.Watched)},
+		{Name: "wallapop_watch_requests", Help: "Searches sent to Wallapop in the last round", Value: float64(res.Requests)},
+		{Name: "wallapop_watch_shared", Help: "Searches answered by one another chat had already asked for", Value: float64(res.Shared)},
 		{Name: "wallapop_watch_scanned", Help: "Listings read in the last round", Value: float64(res.Scanned)},
 		{Name: "wallapop_watch_new", Help: "Listings announced in the last round", Value: float64(len(res.New))},
 		{Name: "wallapop_watch_duplicates", Help: "Listings dropped as a copy of one already seen", Value: float64(res.Duplicates)},

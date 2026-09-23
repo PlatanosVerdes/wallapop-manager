@@ -35,11 +35,13 @@ type Config struct {
 
 	// The watcher: the bot, the users' searches, and what it is allowed to say.
 	TelegramToken string
-	// TelegramChat is the owner's chat: it approves who joins, and it is the only one told
-	// about the catalogue and the session.
+	// TelegramChat is the owner's chat, the only one told about the catalogue and the
+	// session.
 	TelegramChat string
-	// MaxSearches is how many searches one chat may keep.
+	// MaxSearches is how many searches one chat may keep, and MaxUsers how many chats may
+	// join: the bot is public, and every search is requests from the Pi.
 	MaxSearches    int
+	MaxUsers       int
 	WatchMin       time.Duration
 	WatchMax       time.Duration
 	WatchMaxAge    time.Duration
@@ -80,6 +82,7 @@ func Load() (Config, error) {
 		TelegramToken:  env("WALLA_TELEGRAM_TOKEN", ""),
 		TelegramChat:   env("WALLA_TELEGRAM_CHAT", ""),
 		MaxSearches:    number("WALLA_MAX_SEARCHES", 3),
+		MaxUsers:       number("WALLA_MAX_USERS", 20),
 		WatchMin:       duration("WALLA_WATCH_MIN", 5*time.Minute),
 		WatchMax:       duration("WALLA_WATCH_MAX", 15*time.Minute),
 		WatchMaxAge:    duration("WALLA_WATCH_MAX_AGE", 24*time.Hour),

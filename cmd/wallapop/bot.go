@@ -10,8 +10,6 @@ import (
 
 	"github.com/PlatanosVerdes/wallapop-manager/internal/commands"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
-	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
-	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/users"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
@@ -26,23 +24,17 @@ const (
 	buttonAskDelete = "d:"
 	buttonDelete    = "D:"
 	buttonKeep      = "k:"
-	buttonApprove   = "a:"
-	buttonReject    = "r:"
 	buttonLeave     = "B:"
 	buttonStay      = "x:"
 )
 
+// botState answers each chat about its own searches and nothing else: no other chat, and
+// nothing of the owner's account.
 type botState struct {
-	cfg       config.Config
-	store     *session.Store
-	people    *users.Store
-	log       *slog.Logger
-	bot       *telegram.Bot
-	nextWatch func() time.Time
-	nextRun   func() time.Time
+	cfg    config.Config
+	people *users.Store
+	log    *slog.Logger
 }
-
-func (b *botState) owner(chat string) bool { return chat == b.cfg.TelegramChat }
 
 func (b *botState) commands(listener *commands.Listener) []commands.Command {
 	return []commands.Command{
@@ -68,13 +60,6 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
 				user, _ := b.people.Get(req.ChatID())
 				return commands.Reply{Text: searchesText(user, b.cfg.MaxSearches), Keys: searchKeys(user)}, nil
-			},
-		},
-		{
-			Name: "estado",
-			Help: "ultima ronda y proxima",
-			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
-				return commands.Say(b.status(req.ChatID())), nil
 			},
 		},
 		{
@@ -118,31 +103,25 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 const howToAdd = "<i>Para guardar una busqueda, hazla en es.wallapop.com con los filtros que quieras " +
 	"y pegame aqui la direccion de la pagina.</i>"
 
-// start is the only command a stranger can run. It asks the owner, once, and the owner's
-// yes is what lets the chat in.
-func (b *botState) start(ctx context.Context, req commands.Request) (commands.Reply, error) {
-	chat := req.ChatID()
-	if user, ok := b.people.Get(chat); ok {
-		if user.Active {
-			return commands.Say("👋 Ya estas dentro.\n\n" + howToAdd), nil
+// start is the only command a stranger can run, and all it takes to join.
+func (b *botState) start(_ context.Context, req commands.Request) (commands.Reply, error) {
+	chat, name := req.ChatID(), req.Chat.Name()
+	if _, ok := b.people.Get(chat); ok {
+		if err := b.people.Rename(chat, name); err != nil {
+			return commands.Reply{}, err
 		}
-		return commands.Say("⏳ Tu solicitud sigue pendiente."), nil
+		return commands.Say("👋 Ya estas dentro.\n\n" + howToAdd), nil
 	}
 
-	created, err := b.people.Request(chat, req.Chat.Name(), false, time.Now())
-	if err != nil || !created {
+	if len(b.people.All()) >= b.cfg.MaxUsers {
+		b.log.Warn("somebody could not join, the bot is full", "chat", chat, "name", name)
+		return commands.Say("Lo siento, el bot esta lleno."), nil
+	}
+	if _, err := b.people.Request(chat, name, true, time.Now()); err != nil {
 		return commands.Reply{}, err
 	}
-	b.log.Info("somebody asked to join", "chat", chat, "name", req.Chat.Name())
-	ask := fmt.Sprintf("🙋 <b>%s</b> quiere usar el bot.", telegram.Escape(req.Chat.Name()))
-	keys := &telegram.Keyboard{Rows: [][]telegram.Button{{
-		{Text: "✅ Dejarle entrar", Data: buttonApprove + chat, Style: "success"},
-		{Text: "Rechazar", Data: buttonReject + chat, Style: "danger"},
-	}}}
-	if err := b.bot.To(b.cfg.TelegramChat).Text(ctx, ask, keys); err != nil {
-		return commands.Reply{}, err
-	}
-	return commands.Say("👋 Hola. He pedido que te dejen entrar; te aviso aqui en cuanto este."), nil
+	b.log.Info("a chat joined", "chat", chat, "name", name)
+	return commands.Say("👋 Hola. " + howToAdd + "\n\n/ayuda para el resto."), nil
 }
 
 // onText takes a pasted address as a new search, which is the whole of adding one from a
@@ -250,12 +229,6 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 	case buttonKeep:
 		return "", b.keysOf(chat), nil
 
-	case buttonApprove, buttonReject:
-		if !b.owner(chat) {
-			return "", nil, nil
-		}
-		return b.decide(ctx, verb == buttonApprove, arg)
-
 	case buttonLeave:
 		// A round in progress would write this chat's folder back after it is removed.
 		if !watching.TryLock() {
@@ -275,29 +248,6 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Sigues dentro")}}}, nil
 	}
 	return "", nil, nil
-}
-
-// decide is the owner's answer to somebody asking to join, and the asker hears it.
-func (b *botState) decide(ctx context.Context, approve bool, chat string) (string, *telegram.Keyboard, error) {
-	user, ok := b.people.Get(chat)
-	if !ok {
-		return "Esa solicitud ya no esta", &telegram.Keyboard{}, nil
-	}
-	to := b.bot.To(chat)
-	if !approve {
-		if err := b.people.Remove(chat); err != nil {
-			return "", nil, err
-		}
-		_ = to.Text(ctx, "No te han dado acceso.", nil)
-		return "Rechazado", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("❌ " + user.Name + " rechazado")}}}, nil
-	}
-
-	if _, err := b.people.Approve(chat); err != nil {
-		return "", nil, err
-	}
-	b.log.Info("a chat was let in", "chat", chat, "name", user.Name)
-	_ = to.Text(ctx, "✅ Ya estas dentro.\n\n"+howToAdd+"\n\n/ayuda para el resto.", nil)
-	return "Dentro", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("✅ " + user.Name + " dentro")}}}, nil
 }
 
 func (b *botState) keysOf(chat string) *telegram.Keyboard {
@@ -379,57 +329,4 @@ func htmlRound(res watch.Result) string {
 		fmt.Fprintf(&t, "\n⚠️ %s: %s", telegram.Escape(f.Search), telegram.Escape(f.Error))
 	}
 	return t.String()
-}
-
-// status answers "is this alive". Everybody gets the rounds; the owner also gets the
-// catalogue, the session and who is using the bot, which are nobody else's business.
-func (b *botState) status(chat string) string {
-	var t strings.Builder
-	fmt.Fprintf(&t, "📊 <b>wallapop</b> <code>%s</code>\n", buildVersion)
-
-	if res, ok := watch.LoadResult(b.cfg.DataDir); ok {
-		fmt.Fprintf(&t, "\nUltima ronda a las %s", res.StartedAt.Format("15:04"))
-		if b.owner(chat) {
-			fmt.Fprintf(&t, ": %d usuarios, %d busquedas, %d anuncios, <b>%d nuevos</b>",
-				res.Users, res.Watched, res.Scanned, len(res.New))
-		}
-		t.WriteString("\n")
-	}
-	if next := b.nextWatch(); !next.IsZero() {
-		fmt.Fprintf(&t, "<i>proxima a las %s</i>\n", next.Format("15:04"))
-	}
-	if user, ok := b.people.Get(chat); ok {
-		fmt.Fprintf(&t, "Tus busquedas: %d de %d\n", len(user.Searches), b.cfg.MaxSearches)
-	}
-	if !b.owner(chat) {
-		return strings.TrimRight(t.String(), "\n")
-	}
-
-	waiting := 0
-	all := b.people.All()
-	for _, user := range all {
-		if !user.Active {
-			waiting++
-		}
-	}
-	fmt.Fprintf(&t, "\n👥 <b>%d usuarios</b>", len(all)-waiting)
-	if waiting > 0 {
-		fmt.Fprintf(&t, " · %d esperando", waiting)
-	}
-	t.WriteString("\n")
-
-	if res, ok := reactivate.LoadResult(b.cfg.DataDir); ok {
-		fmt.Fprintf(&t, "\n♻️ <b>Catalogo</b> · %s\n", res.StartedAt.Format("02/01"))
-		fmt.Fprintf(&t, "%d anuncios · %d caducados · <b>%d reactivados</b>\n",
-			res.Catalogue, res.Expired, len(res.Reactivated))
-	}
-	if next := b.nextRun(); !next.IsZero() {
-		fmt.Fprintf(&t, "<i>proxima pasada el %s</i>\n", next.Format("02/01 a las 15:04"))
-	}
-	if sess := b.store.Current(); sess != nil {
-		if left, ok := sess.Renewable(); ok {
-			fmt.Fprintf(&t, "\n🔑 <b>Sesion</b> · %.0f dias de margen", left.Hours()/24)
-		}
-	}
-	return strings.TrimRight(t.String(), "\n")
 }

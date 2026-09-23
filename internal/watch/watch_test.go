@@ -364,3 +364,51 @@ func TestOnlyTheFirstPageIsReadBetweenDeepRounds(t *testing.T) {
 		t.Fatalf("a deep round read %d pages, expected all of them", len(fake.queries))
 	}
 }
+
+// Two chats watching the same search cost one request, and each still hears about the
+// listing, because each has its own memory of what it has seen.
+func TestTheSameSearchIsAskedOncePerRound(t *testing.T) {
+	fake := &fakeWallapop{}
+	client, opt := newWatcher(t, fake)
+	fake.items = []wallapop.SearchItem{newItem("a", "Estanteria", 40, time.Minute, fake.photo("a"))}
+
+	ana, _ := LoadSeen(t.TempDir())
+	luis, _ := LoadSeen(t.TempDir())
+	searches := []Search{newSearch("s1", "kallax")}
+	Run(context.Background(), client, ana, searches, &recorder{}, opt, quiet())
+	Run(context.Background(), client, luis, []Search{newSearch("s9", "kallax")}, &recorder{}, opt, quiet())
+
+	fake.queries = nil
+	fake.items = append(fake.items, newItem("b", "Kallax nueva", 60, time.Minute, fake.photo("b")))
+	catalogue := NewCatalogue(client, 0, 0)
+	toAna, toLuis := &recorder{}, &recorder{}
+	Run(context.Background(), catalogue, ana, searches, toAna, opt, quiet())
+	Run(context.Background(), catalogue, luis, []Search{newSearch("s9", "kallax")}, toLuis, opt, quiet())
+
+	if len(fake.queries) != 1 || catalogue.Requests != 1 || catalogue.Shared != 1 {
+		t.Fatalf("%d requests went out (%d shared), expected 1", len(fake.queries), catalogue.Shared)
+	}
+	if len(toAna.listings) != 1 || len(toLuis.listings) != 1 {
+		t.Fatalf("ana heard %v and luis %v, expected one listing each", toAna.listings, toLuis.listings)
+	}
+}
+
+// A shallow answer cannot stand in for a deep one: the chat that needs every page asks.
+func TestADeeperReadIsNotAnsweredByAShallowOne(t *testing.T) {
+	fake := &fakeWallapop{}
+	client, _ := newWatcher(t, fake)
+	fake.items = []wallapop.SearchItem{newItem("a", "Primera", 100, time.Minute, fake.photo("a"))}
+	fake.secondPage = []wallapop.SearchItem{newItem("b", "Segunda", 200, time.Minute, fake.photo("b"))}
+
+	catalogue := NewCatalogue(client, 0, 0)
+	query := newSearch("s1", "motos").Query
+	if items, _ := catalogue.Search(context.Background(), query, 1); len(items) != 1 {
+		t.Fatalf("one page answered %d listings", len(items))
+	}
+	if items, _ := catalogue.Search(context.Background(), query, 3); len(items) != 2 {
+		t.Fatalf("the deep read answered %d listings, expected both pages", len(items))
+	}
+	if items, _ := catalogue.Search(context.Background(), query, 1); len(items) != 2 || catalogue.Shared != 1 {
+		t.Fatalf("the shallow read after a deep one went out again: shared=%d", catalogue.Shared)
+	}
+}

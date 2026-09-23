@@ -5,9 +5,9 @@ Two jobs, one binary:
 - **The catalogue.** A listing on my account expires after a while and goes quiet until
   somebody presses **Reactivar** on it. This does that pass once a day, and says nothing
   unless something needs a human.
-- **The searches.** A Telegram bot for a handful of friends. Each one pastes the address of
-  a search made on the web, the searches are replayed every few minutes, and anything
-  genuinely new in them arrives in that person's chat with its photo and a link.
+- **The searches.** A public Telegram bot. Anybody pastes the address of a search made on
+  the web, the searches are replayed every few minutes, and anything genuinely new in them
+  arrives in that person's chat with its photo and a link.
 
 Runs on the Raspberry from [rpi-services](https://github.com/PlatanosVerdes/rpi-services),
 same conventions as the rest: Go with no dependencies, CalVer tag on every push to main,
@@ -133,15 +133,21 @@ first page, so an ordinary round reads **one page per search**. Once every
 round of a new search: that is what keeps the prices further down a search watched, and
 what records a new search whole before it starts talking.
 
+A search is asked once per round however many chats watch it: each chat compares the same
+answer against its own memory. The round's summary and `wallapop_watch_shared` say how
+many were answered that way.
+
 With five people and `WALLA_MAX_SEARCHES` at 3, an ordinary round is at most 15 requests
 and a deep one 45, plus the thumbnails of listings never seen before.
 
 ## The bot
 
-A bot of its own, for this and nothing else. Somebody writes `/start`, the owner
-(`WALLA_TELEGRAM_CHAT`) gets a message with two buttons, and only the owner's yes lets that
-chat in. A bot is public, so until then everything but `/start` is ignored: otherwise
-anybody who found it could use the Pi to watch Wallapop.
+A bot of its own, for this and nothing else, and open: `/start` is all it takes to join,
+up to `WALLA_MAX_USERS` chats, because every search is requests from the Pi. A chat that
+has not sent `/start` gets nothing else answered.
+
+Each chat sees its own searches and its own listings, and nothing else: not the other
+chats, and nothing of the account the catalogue runs on.
 
 A search is added by pasting the address of a search made on es.wallapop.com, with any
 text around it taken as its name. The answer says the radius, which matters because a
@@ -151,7 +157,6 @@ search made without a location covers the whole country.
 | :--- | :--- |
 | `/busquedas` | Your searches, each with a bell that silences it or gives it back and a bin that deletes it after asking |
 | `/nueva <address>` | The same as pasting the address |
-| `/estado` | The last round and the next one. The owner also gets the catalogue, the session and who is using the bot |
 | `/ahora` | Runs your searches now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
 | `/baja` | Deletes your searches and what was seen for you, after asking |
 | `/ayuda` | The list, built from the same table the bot dispatches from |
@@ -164,7 +169,7 @@ search**, because the moment it is clear that a search is talking too much is th
 one of its messages arrives. The address rides on the button rather than in the text.
 
 Every press is looked up inside the chat it came from, so a forged button cannot reach
-somebody else's search, and approving is only obeyed from the owner's chat.
+somebody else's search.
 
 A command sent while the container is being replaced is not lost: the queue handed over on
 the first read is judged by the age of each message, and anything sent within two minutes
@@ -228,8 +233,9 @@ The watcher:
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
 | `WALLA_TELEGRAM_TOKEN` | – | Bot token. Empty means the watcher runs and announces nothing |
-| `WALLA_TELEGRAM_CHAT` | – | The owner's chat: always let in, approves everybody else, and the only one told about the catalogue and the session |
+| `WALLA_TELEGRAM_CHAT` | – | The owner's chat, created on start so the searches seen before the bot had users are kept |
 | `WALLA_MAX_SEARCHES` | `3` | Searches one chat may keep |
+| `WALLA_MAX_USERS` | `20` | Chats that may join |
 | `WALLA_WATCH_MIN` / `WALLA_WATCH_MAX` | `5m` / `15m` | The round is run after a random wait in this range, so the pattern is not a metronome |
 | `WALLA_WATCH_MAX_AGE` | `24h` | A listing older than this is recorded without a message: it was already there |
 | `WALLA_WATCH_MAX_ALERTS` | `10` | Messages per round. The rest are counted in one line at the end |
@@ -267,7 +273,7 @@ The endpoints, so a change on their side is a redeploy and not a rebuild:
   "next_run": "2026-09-23T09:00:00+02:00",
   "last_run": { "catalogue": 10, "expired": 6, "reactivated": ["Apple Watch SE 2 44mm"] },
   "next_watch": "2026-09-22T11:19:00+02:00",
-  "last_watch": { "users": 3, "watched": 5, "scanned": 200, "duplicates": 21, "new": [] }
+  "last_watch": { "users": 3, "requests": 4, "shared": 1, "watched": 5, "scanned": 200, "duplicates": 21, "new": [] }
 }
 ```
 
@@ -278,7 +284,8 @@ searches does not change it: the next round is minutes away.
 Both jobs report as gauges, and the alert rules decide what is worth waking somebody for:
 `wallapop_last_run_status`, `wallapop_session_days_remaining`, `wallapop_expired_listings`,
 `wallapop_reactivated_listings`, and for the watcher `wallapop_watch_status`,
-`wallapop_watch_users`, `wallapop_watch_searches`, `wallapop_watch_scanned`,
+`wallapop_watch_users`, `wallapop_watch_searches`, `wallapop_watch_requests`,
+`wallapop_watch_shared`, `wallapop_watch_scanned`,
 `wallapop_watch_new`, `wallapop_watch_duplicates`, `wallapop_watch_cheaper`.
 
 Telegram carries the listings, and the answers to whoever asked. The state of the service
