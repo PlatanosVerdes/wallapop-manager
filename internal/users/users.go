@@ -35,9 +35,11 @@ type User struct {
 type Search struct {
 	// ID is short on purpose: it travels inside callback_data, which Telegram caps at 64
 	// bytes.
-	ID    string    `json:"id"`
-	Name  string    `json:"name"`
-	Query string    `json:"query"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Query string `json:"query"`
+	// Place is the town the search is measured from, when it was named rather than sent.
+	Place string    `json:"place,omitempty"`
 	Muted bool      `json:"muted,omitempty"`
 	Added time.Time `json:"added"`
 }
@@ -185,7 +187,7 @@ func (s *Store) Remove(chat string) error {
 
 // Add stores a search for an active user, within the limit. The same query twice is
 // refused: it would announce every listing twice.
-func (s *Store) Add(chat, name string, query url.Values, limit int, now time.Time) (Search, error) {
+func (s *Store) Add(chat, name, place string, query url.Values, limit int, now time.Time) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
 		return Search{}, err
@@ -204,7 +206,7 @@ func (s *Store) Add(chat, name string, query url.Values, limit int, now time.Tim
 	if limit > 0 && len(user.Searches) >= limit {
 		return Search{}, fmt.Errorf("%w (%d)", ErrTooMany, limit)
 	}
-	search := Search{ID: newID(), Name: name, Query: encoded, Added: now}
+	search := Search{ID: newID(), Name: name, Place: place, Query: encoded, Added: now}
 	user.Searches = append(user.Searches, search)
 	return search, s.save()
 }
@@ -263,7 +265,7 @@ func (s *Store) RenameSearch(chat, id, name string) (Search, error) {
 
 // SetQuery changes what a search looks for. It gets a new id, so its first round records
 // what is already there instead of announcing it as new.
-func (s *Store) SetQuery(chat, id string, query url.Values) (Search, error) {
+func (s *Store) SetQuery(chat, id, place string, query url.Values) (Search, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
 		return Search{}, err
@@ -283,6 +285,7 @@ func (s *Store) SetQuery(chat, id string, query url.Values) (Search, error) {
 		if user.Searches[i].ID == id {
 			user.Searches[i].ID = newID()
 			user.Searches[i].Query = encoded
+			user.Searches[i].Place = place
 			return user.Searches[i], s.save()
 		}
 	}

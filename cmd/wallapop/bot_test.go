@@ -135,7 +135,7 @@ func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
 	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
-	search, err := addSearch(b.cfg, b.people, ownerChat, motos, "")
+	search, err := addSearch(context.Background(), b.cfg, b.people, ownerChat, motos, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
 func TestDeletingAsksFirst(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
-	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+	search, _ := addSearch(context.Background(), b.cfg, b.people, ownerChat, motos, "Motos")
 
 	_, keys, _ := b.onButton(ctx, ownerChat, buttonAskDelete+search.ID)
 	if _, err := b.people.Search(ownerChat, search.ID); err != nil {
@@ -174,7 +174,7 @@ func TestLeavingRemovesEverything(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
 	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
-	_, _ = addSearch(b.cfg, b.people, friendChat, motos, "")
+	_, _ = addSearch(context.Background(), b.cfg, b.people, friendChat, motos, "")
 
 	if _, _, err := b.onButton(ctx, friendChat, buttonLeave); err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestThePencilRenames(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
 	me := commands.Request{Chat: telegram.Chat{ID: 100}}
-	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+	search, _ := addSearch(context.Background(), b.cfg, b.people, ownerChat, motos, "Motos")
 
 	if _, _, err := b.onButton(ctx, ownerChat, buttonRename+search.ID); err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestThePencilRenames(t *testing.T) {
 func TestAnAddressIsNotAName(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
-	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+	search, _ := addSearch(context.Background(), b.cfg, b.people, ownerChat, motos, "Motos")
 	_, _, _ = b.onButton(ctx, ownerChat, buttonRename+search.ID)
 
 	_, err := b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 100},
@@ -257,7 +257,7 @@ func TestAForgedPencilRenamesNothing(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
 	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
-	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+	search, _ := addSearch(context.Background(), b.cfg, b.people, ownerChat, motos, "Motos")
 
 	_, _, _ = b.onButton(ctx, friendChat, buttonRename+search.ID)
 	_, _ = b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 200}, Args: "mia"})
@@ -293,8 +293,8 @@ func TestCheckReadsTheSearchPicked(t *testing.T) {
 	b := newBot(t)
 	asked := fakeSearch(t, b)
 	ctx := context.Background()
-	kallax, _ := addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
-	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
+	kallax, _ := addSearch(context.Background(), b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
+	_, _ = addSearch(context.Background(), b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
 	_, _ = b.people.SetMuted(ownerChat, kallax.ID, true)
 
 	_, keys, err := b.onButton(ctx, ownerChat, buttonCheck+kallax.ID)
@@ -316,8 +316,8 @@ func TestCheckReadsTheSearchPicked(t *testing.T) {
 
 func TestCheckOffersEverySearchAndAll(t *testing.T) {
 	b := newBot(t)
-	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
-	_, _ = addSearch(b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
+	_, _ = addSearch(context.Background(), b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=kallax", "")
+	_, _ = addSearch(context.Background(), b.cfg, b.people, ownerChat, "https://es.wallapop.com/search?keywords=bici", "")
 	user, _ := b.people.Get(ownerChat)
 	keys := checkKeys(user)
 	if len(keys.Rows) != 3 || keys.Rows[2][0].Data != buttonCheck {

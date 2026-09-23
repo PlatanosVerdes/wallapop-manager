@@ -18,9 +18,11 @@ Runs on the Raspberry from [rpi-services](https://github.com/PlatanosVerdes/rpi-
    | `kallax hasta 40` · `máx 40` · `menos de 40` | up to 40 € |
    | `moto desde 1.500` · `más de 1500` | from 1500 € |
    | `bici 100-300` · `entre 100 y 300` | 100 to 300 € |
-   | `sofá a 20 km` | 20 km around the location sent next |
+   | `sofá en Sant Cugat` | 30 km around Sant Cugat |
+   | `sofá en Sant Cugat a 10 km` | 10 km around Sant Cugat |
 
-3. Optional: send your location (📎 → Location) to limit the latest search to around it, 30 km unless the text said otherwise.
+   The town after the last `en` is looked up on OpenStreetMap; when it is no town (`funda en piel`), it stays part of the text.
+3. Optional: send a location (📎 → Location, any point on the map) to move the latest search there, 30 km unless the text said otherwise.
 
 For filters the text cannot say (category, condition, brand and model), make the search on es.wallapop.com in a phone browser (typed in the address bar, so it does not jump to the app) and paste its address. Whatever is written next to it is the name, e.g. `coches top https://es.wallapop.com/search?...`
 
@@ -106,6 +108,7 @@ wallapop session show | refresh         # check the session
 | `WALLA_WATCH_PHOTOS` | `2` | Photos hashed per listing |
 | `WALLA_WATCH_DROP` | `5` | % drop to announce a cheaper listing (`0` = off) |
 | `WALLA_SEEN_TTL` | `720h` | How long a listing is remembered |
+| `WALLA_PLACES_URL` | Nominatim | Geocoder for `en <town>` (empty = off) |
 | `WALLA_INTERVAL` | `24h` | Time between catalogue passes |
 | `WALLA_RETRY_EVERY` | `15m` | Retry after a failed pass |
 | `WALLA_MIN_PAUSE` / `MAX_PAUSE` | `20s` / `90s` | Pause between reactivations |

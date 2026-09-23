@@ -22,6 +22,7 @@ import (
 	"github.com/PlatanosVerdes/wallapop-manager/internal/commands"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/metrics"
+	"github.com/PlatanosVerdes/wallapop-manager/internal/places"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/reactivate"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/server"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
@@ -321,7 +322,7 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 		if fs.NArg() != 1 {
 			return errors.New("searches add needs the address of the search")
 		}
-		search, err := addSearch(cfg, people, *chat, fs.Arg(0), *name)
+		search, err := addSearch(context.Background(), cfg, people, *chat, fs.Arg(0), *name)
 		if err != nil {
 			return err
 		}
@@ -348,19 +349,48 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 
 // addSearch is the one way a search comes in, from the bot or from the terminal: the address
 // of a search made on the web, or the search written out.
-func addSearch(cfg config.Config, people *users.Store, chat, input, name string) (users.Search, error) {
-	parse := wallapop.FromText
+func addSearch(ctx context.Context, cfg config.Config, people *users.Store, chat, input, name string) (users.Search, error) {
+	var (
+		query url.Values
+		place string
+		err   error
+	)
 	if strings.Contains(input, "wallapop.com") {
-		parse = wallapop.FromWebURL
+		query, err = wallapop.FromWebURL(input)
+	} else {
+		query, place, err = fromText(ctx, places.New(cfg.PlacesURL), input)
 	}
-	query, err := parse(input)
 	if err != nil {
 		return users.Search{}, err
 	}
 	if name = strings.TrimSpace(name); name == "" {
 		name = searchName(query)
 	}
-	return people.Add(chat, name, query, cfg.MaxSearches, time.Now())
+	return people.Add(chat, name, place, query, cfg.MaxSearches, time.Now())
+}
+
+// fromText reads a written search, and the town after its last "en" when there is one: "funda
+// en piel" keeps its "en" because piel is no town.
+func fromText(ctx context.Context, finder *places.Finder, text string) (url.Values, string, error) {
+	query, err := wallapop.FromText(text)
+	if err != nil || !finder.Enabled() {
+		return query, "", err
+	}
+	keywords := query.Get("keywords")
+	at := strings.LastIndex(strings.ToLower(keywords), " en ")
+	if at < 0 {
+		return query, "", nil
+	}
+	what, where := strings.TrimSpace(keywords[:at]), strings.TrimSpace(keywords[at+len(" en "):])
+	place, found, err := finder.Find(ctx, where)
+	if err != nil {
+		return nil, "", fmt.Errorf("no he podido buscar %q en el mapa, prueba otra vez o mándame la ubicación 📎", where)
+	}
+	if !found {
+		return query, "", nil
+	}
+	query.Set("keywords", what)
+	return wallapop.Near(query, place.Latitude, place.Longitude, defaultRadiusKm), place.Name, nil
 }
 
 // searchName is what a search is called when nobody names it: what was typed, or else the
