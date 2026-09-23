@@ -56,5 +56,5 @@ docker exec wallapop-manager wallapop watch --dry-run
 docker exec wallapop-manager wallapop run --dry-run
 ```
 
-Searches live in `users.json` and are added, silenced and deleted from the bot. Nothing
+Searches live in `searches.json` and are added, silenced and deleted from the bot. Nothing
 in the watcher writes to, or even reads, the Wallapop account.
