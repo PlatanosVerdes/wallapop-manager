@@ -86,42 +86,18 @@ func TestAPastedAddressBecomesASearch(t *testing.T) {
 	}
 }
 
-func TestAWrittenSearchWaitsForItsTick(t *testing.T) {
+func TestAWrittenSearchIsSaved(t *testing.T) {
 	b := newBot(t)
-	ctx := context.Background()
-	reply, err := b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 100}, Args: "bici 100-300"})
+	reply, err := b.onText(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: "bici 100-300"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply.Text, "¿Vigilo esto?") || !strings.Contains(reply.Text, "de 100 a 300") {
+	if !strings.Contains(reply.Text, "Guardada") || !strings.Contains(reply.Text, "de 100 a 300") {
 		t.Fatalf("the answer was %q", reply.Text)
-	}
-	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 0 {
-		t.Fatalf("saved before the tick: %+v", user.Searches)
-	}
-
-	watchKey := reply.Keys.Rows[0][0].Data
-	if _, _, err := b.onButton(ctx, ownerChat, watchKey); err != nil {
-		t.Fatal(err)
 	}
 	user, _ := b.people.Get(ownerChat)
 	if len(user.Searches) != 1 || user.Searches[0].Name != "bici" {
 		t.Fatalf("stored %+v", user.Searches)
-	}
-	if notice, _, _ := b.onButton(ctx, ownerChat, watchKey); !strings.Contains(notice, "olvidado") {
-		t.Errorf("a second press gave %q", notice)
-	}
-}
-
-func TestAnOlderCardSavesNothing(t *testing.T) {
-	b := newBot(t)
-	ctx := context.Background()
-	owner := telegram.Chat{ID: 100}
-	first, _ := b.onText(ctx, commands.Request{Chat: owner, Args: "kallax"})
-	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "bici"})
-	_, _, _ = b.onButton(ctx, ownerChat, first.Keys.Rows[0][0].Data)
-	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 0 {
-		t.Fatalf("the old card saved %+v", user.Searches)
 	}
 }
 
@@ -129,7 +105,7 @@ func TestSmallTalkIsNoSearch(t *testing.T) {
 	b := newBot(t)
 	for _, text := range []string{"hola", "Gracias!!", "jajaja", "👍", "buenas noches"} {
 		reply, _ := b.onText(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: text})
-		if strings.Contains(reply.Text, "¿Vigilo") || reply.Keys != nil {
+		if strings.Contains(reply.Text, "Guardada") || reply.Keys != nil {
 			t.Errorf("%q was taken as a search: %q", text, reply.Text)
 		}
 	}
@@ -137,24 +113,6 @@ func TestSmallTalkIsNoSearch(t *testing.T) {
 		if smallTalk(text) {
 			t.Errorf("%q was taken as small talk", text)
 		}
-	}
-}
-
-func TestNuevaAloneTakesTheNextMessage(t *testing.T) {
-	b := newBot(t)
-	ctx := context.Background()
-	owner := telegram.Chat{ID: 100}
-	for _, cmd := range b.commands(&commands.Listener{}) {
-		if cmd.Name == "nueva" {
-			_, _ = cmd.Run(ctx, commands.Request{Chat: owner})
-		}
-	}
-	reply, err := b.onText(ctx, commands.Request{Chat: owner, Args: "hola"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 1 || !strings.Contains(reply.Text, "Guardada") {
-		t.Fatalf("the answer was %q, stored %+v", reply.Text, user.Searches)
 	}
 }
 

@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -31,8 +29,6 @@ const (
 	buttonKeep      = "k:"
 	buttonLeave     = "B:"
 	buttonStay      = "x:"
-	buttonWatch     = "w:"
-	buttonDiscard   = "c:"
 )
 
 // botState shows each chat its own searches only: nothing of other chats or the owner's account.
@@ -45,22 +41,7 @@ type botState struct {
 	// In memory on purpose: a question lost to a restart is asked again with the pencil.
 	mu       sync.Mutex
 	renaming map[string]renaming
-	// offers are cards not yet ticked; asking are chats that sent /nueva alone.
-	offers map[string]offer
-	asking map[string]time.Time
 }
-
-type offer struct {
-	token string
-	query url.Values
-	place string
-	made  time.Time
-}
-
-const (
-	offerWindow = 30 * time.Minute
-	askWindow   = 5 * time.Minute
-)
 
 type renaming struct {
 	search string
@@ -81,44 +62,6 @@ func (b *botState) pendingRename(chat string) (string, bool) {
 	return r.search, ok && time.Since(r.asked) < renameWindow
 }
 
-func (b *botState) keepOffer(chat string, o offer) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.offers == nil {
-		b.offers = map[string]offer{}
-	}
-	b.offers[chat] = o
-}
-
-// An older card than the last one finds nothing, so it cannot save the newer search.
-func (b *botState) takeOffer(chat, token string) (offer, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	o, ok := b.offers[chat]
-	if !ok || o.token != token {
-		return offer{}, false
-	}
-	delete(b.offers, chat)
-	return o, time.Since(o.made) < offerWindow
-}
-
-func (b *botState) askFor(chat string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.asking == nil {
-		b.asking = map[string]time.Time{}
-	}
-	b.asking[chat] = time.Now()
-}
-
-func (b *botState) wasAsked(chat string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	asked, ok := b.asking[chat]
-	delete(b.asking, chat)
-	return ok && time.Since(asked) < askWindow
-}
-
 func (b *botState) commands(listener *commands.Listener) []commands.Command {
 	return []commands.Command{
 		{
@@ -131,7 +74,6 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 			Name: "nueva",
 			Help: "Guardar una búsqueda",
 			Run: func(ctx context.Context, req commands.Request) (commands.Reply, error) {
-				b.askFor(req.ChatID())
 				if strings.TrimSpace(req.Args) == "" {
 					return commands.Say("🔎 ¿Qué busco?\n\n<i>Por ejemplo: bici 100-300 en Sant Cugat</i>"), nil
 				}
@@ -216,28 +158,20 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 	return commands.Say("👋 ¡Hola! " + intro + "\n\n" + howToAdd), nil
 }
 
-// A web search address is saved at once; text and listings get a card first, since people
-// also just chat.
 func (b *botState) onText(ctx context.Context, req commands.Request) (commands.Reply, error) {
 	chat := req.ChatID()
 	if req.Location != nil {
 		return b.near(chat, *req.Location)
 	}
-	asked := b.wasAsked(chat)
 	id, renamingOne := b.pendingRename(chat)
 	for _, word := range strings.Fields(req.Args) {
 		if !strings.Contains(word, "wallapop.com") {
 			continue
 		}
-		if _, isListing := wallapop.ItemSlug(word); isListing && !asked {
-			return b.offer(ctx, chat, word)
-		}
 		name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
 		return b.add(ctx, chat, word, name)
 	}
 	switch {
-	case asked:
-		return b.add(ctx, chat, req.Args, "")
 	case renamingOne:
 		return b.rename(chat, id, req.Args)
 	case strings.TrimSpace(req.Args) == "":
@@ -245,36 +179,7 @@ func (b *botState) onText(ctx context.Context, req commands.Request) (commands.R
 	case smallTalk(req.Args):
 		return commands.Say(joke()), nil
 	}
-	return b.offer(ctx, chat, req.Args)
-}
-
-func (b *botState) offer(ctx context.Context, chat, input string) (commands.Reply, error) {
-	query, place, err := parseSearch(ctx, b.cfg, input)
-	if err != nil {
-		return commands.Reply{}, err
-	}
-	o := offer{token: newToken(), query: query, place: place, made: time.Now()}
-	b.keepOffer(chat, o)
-
-	var t strings.Builder
-	t.WriteString("🔎 ¿Vigilo esto?\n\n")
-	fmt.Fprintf(&t, "<b>%s</b>\n", telegram.Escape(searchName(query)))
-	describe(&t, place, query)
-	if _, isListing := wallapop.ItemSlug(input); isListing {
-		t.WriteString("\n<i>Son cosas como ese anuncio. Si prefieres otras palabras, escríbemelas.</i>")
-	}
-	return commands.Reply{Text: t.String(), Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
-		{Text: "✅ Vigilar", Data: buttonWatch + o.token, Style: "success"},
-		{Text: "✖️ No", Data: buttonDiscard + o.token},
-	}, {
-		{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(query)},
-	}}}}, nil
-}
-
-func newToken() string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return b.add(ctx, chat, req.Args, "")
 }
 
 func (b *botState) near(chat string, at telegram.Location) (commands.Reply, error) {
@@ -447,25 +352,6 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		}
 		b.log.Info("a chat left", "chat", chat)
 		return "Hecho", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("👋 Hecho, hasta pronto")}}}, nil
-
-	case buttonWatch:
-		o, ok := b.takeOffer(chat, arg)
-		if !ok {
-			return "Se me ha olvidado, escríbemela otra vez", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("⌛ Caducada")}}}, nil
-		}
-		search, err := b.people.Add(chat, searchName(o.query), o.place, o.query, b.cfg.MaxSearches, time.Now())
-		if err != nil {
-			return err.Error(), nil, nil
-		}
-		b.log.Info("search added", "chat", chat, "search", search.Name)
-		return "Vigilando " + search.Name, &telegram.Keyboard{Rows: [][]telegram.Button{
-			{telegram.Off("✅ Vigilando " + search.Name)},
-			{{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(o.query)}},
-		}}, nil
-
-	case buttonDiscard:
-		b.takeOffer(chat, arg)
-		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Vale, nada")}}}, nil
 
 	case buttonStay:
 		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Sigues dentro")}}}, nil
