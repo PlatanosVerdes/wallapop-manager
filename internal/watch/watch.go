@@ -3,10 +3,10 @@ package watch
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,33 +17,36 @@ import (
 )
 
 type Options struct {
-	// All watches every saved search. Off, only the ones whose alert is on in the app are
-	// followed, which is how the switch on the phone keeps deciding.
-	All bool
 	// MaxAge is how recent a listing has to be to be worth a message. Anything older is
 	// recorded in silence: it was already there, the search just reached it.
 	MaxAge    time.Duration
 	MaxAlerts int
 	// PhotosPerItem is how many pictures of a new listing are hashed.
 	PhotosPerItem int
-	// Pages of each search to read. One page is 40 listings.
+	// Pages of each search to read on a deep round, and on the first round of a search.
+	// Any other round reads one page of 40, which is where anything new shows up.
 	Pages              int
+	Deep               bool
 	SeenTTL            time.Duration
 	MinPause, MaxPause time.Duration
-	// Mutes are the searches silenced from the bot. Nil watches everything the app says.
-	Mutes *Mutes
 	// Drop is how much of its own lowest price a listing has to shed before the fall is
 	// worth a message, as a fraction. Zero says nothing about prices at all.
 	Drop   float64
 	DryRun bool
 }
 
+type Search struct {
+	ID    string
+	Name  string
+	Query url.Values
+}
+
 // Notifier is what says a listing out loud. The whole search goes through because the
 // message carries a button to silence it, and that needs its id.
 type Notifier interface {
-	Listing(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error
+	Listing(ctx context.Context, search Search, item wallapop.SearchItem) error
 	// Cheaper is the same listing as before at a lower price.
-	Cheaper(ctx context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error
+	Cheaper(ctx context.Context, search Search, item wallapop.SearchItem, before float64) error
 	Say(ctx context.Context, text string) error
 }
 
@@ -53,6 +56,7 @@ type Failure struct {
 }
 
 type Hit struct {
+	Chat   string  `json:"chat,omitempty"`
 	Search string  `json:"search"`
 	Title  string  `json:"title"`
 	Price  float64 `json:"price"`
@@ -64,12 +68,11 @@ type Result struct {
 	StartedAt time.Time     `json:"started_at"`
 	Duration  time.Duration `json:"duration"`
 	DryRun    bool          `json:"dry_run,omitempty"`
-	// Watched and Ignored split the saved searches by the alert switch in the app, and
-	// Silenced counts the ones switched off from the bot instead.
-	Watched  int `json:"watched"`
-	Ignored  int `json:"ignored"`
-	Silenced int `json:"silenced,omitempty"`
-	Scanned  int `json:"scanned"`
+	Users     int           `json:"users"`
+	Deep      bool          `json:"deep,omitempty"`
+	Watched   int           `json:"watched"`
+	Silenced  int           `json:"silenced,omitempty"`
+	Scanned   int           `json:"scanned"`
 	// Seeded is what was recorded without a message: the first pass of a search, and
 	// listings already too old to be news.
 	Seeded     int       `json:"seeded"`
@@ -79,7 +82,23 @@ type Result struct {
 	New        []Hit     `json:"new,omitempty"`
 	Failures   []Failure `json:"failures,omitempty"`
 	Error      string    `json:"error,omitempty"`
-	NeedsHuman bool      `json:"needs_human,omitempty"`
+}
+
+// Merge adds one user's round to the whole: the round is one, the chats are several.
+func (r *Result) Merge(o Result) {
+	r.Users++
+	r.Watched += o.Watched
+	r.Silenced += o.Silenced
+	r.Scanned += o.Scanned
+	r.Seeded += o.Seeded
+	r.Duplicates += o.Duplicates
+	r.Held += o.Held
+	r.Cheaper = append(r.Cheaper, o.Cheaper...)
+	r.New = append(r.New, o.New...)
+	r.Failures = append(r.Failures, o.Failures...)
+	if o.Error != "" && r.Error == "" {
+		r.Error = o.Error
+	}
 }
 
 func (r Result) OK() bool { return r.Error == "" && len(r.Failures) == 0 }
@@ -88,7 +107,7 @@ func (r Result) Summary() string {
 	if r.Error != "" {
 		return "wallapop: la ronda de busquedas ha fallado: " + r.Error
 	}
-	msg := fmt.Sprintf("wallapop: %d busquedas, %d anuncios mirados, %d nuevos", r.Watched, r.Scanned, len(r.New))
+	msg := fmt.Sprintf("wallapop: %d usuarios, %d busquedas, %d anuncios mirados, %d nuevos", r.Users, r.Watched, r.Scanned, len(r.New))
 	if len(r.Cheaper) > 0 {
 		msg += fmt.Sprintf(", %d mas baratos", len(r.Cheaper))
 	}
@@ -110,46 +129,32 @@ func (r Result) Summary() string {
 	return msg
 }
 
-// Run reads the saved searches and announces what is genuinely new in them.
-func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifier, opt Options, log *slog.Logger) Result {
-	res := Result{StartedAt: time.Now(), DryRun: opt.DryRun}
+// Run replays one user's searches against what that user has already seen, and
+// announces what is genuinely new in them. The pause between searches is the caller's.
+func Run(ctx context.Context, client *wallapop.Client, seen *Seen, searches []Search, notify Notifier, opt Options, log *slog.Logger) Result {
+	res := Result{StartedAt: time.Now(), DryRun: opt.DryRun, Deep: opt.Deep}
 	defer func() { res.Duration = time.Since(res.StartedAt).Round(time.Second) }()
-
-	searches, err := client.SavedSearches(ctx)
-	if err != nil {
-		res.Error = err.Error()
-		res.NeedsHuman = errors.Is(err, wallapop.ErrUnauthorized)
-		return res
-	}
 
 	hasher := NewHasher(opt.PhotosPerItem)
 	now := time.Now()
 	for _, search := range searches {
-		// The switch in the app is the setting. A search with its alert off is one he
-		// turned off, and this must not quietly turn it back on.
-		if !search.Alert.Enabled && !opt.All {
-			res.Ignored++
-			continue
-		}
-		// Silenced from the bot: the app still has its alert on, this just has nothing to
-		// say about it for now.
-		if opt.Mutes.IsMuted(search.ID) {
-			res.Silenced++
-			continue
-		}
 		res.Watched++
-
 		if res.Watched > 1 {
-			if err := pause(ctx, opt.MinPause, opt.MaxPause); err != nil {
+			if err := Pause(ctx, opt.MinPause, opt.MaxPause); err != nil {
 				res.Error = err.Error()
 				break
 			}
 		}
 
-		items, err := client.Search(ctx, search.Values(), opt.Pages)
+		firstPass := !seen.Watched(search.ID)
+		pages := 1
+		if opt.Deep || firstPass {
+			pages = opt.Pages
+		}
+		items, err := client.Search(ctx, search.Query, pages)
 		if err != nil {
-			log.Error("search failed", "search", search.Name(), "err", err)
-			res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
+			log.Error("search failed", "search", search.Name, "err", err)
+			res.Failures = append(res.Failures, Failure{Search: search.Name, Error: err.Error()})
 			continue
 		}
 		res.Scanned += len(items)
@@ -157,7 +162,6 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 		// Oldest first, so several listings arriving together reach Telegram in the order
 		// they were posted.
 		sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt < items[j].CreatedAt })
-		firstPass := !seen.Watched(search.ID)
 
 		for _, item := range items {
 			// A listing already known is not news, but its price can be: the same thing
@@ -172,7 +176,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 					continue
 				}
 				res.Cheaper = append(res.Cheaper, Hit{
-					Search: search.Name(), Title: item.Title,
+					Search: search.Name, Title: item.Title,
 					Price: item.Price.Amount, City: item.Where(), URL: item.URL(),
 				})
 				log.Info("cheaper", "title", item.Title, "before", before, "now", item.Price.Amount)
@@ -181,14 +185,14 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 				}
 				if err := notify.Cheaper(ctx, search, item, before); err != nil {
 					log.Error("could not send the drop", "title", item.Title, "err", err)
-					res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
+					res.Failures = append(res.Failures, Failure{Search: search.Name, Error: err.Error()})
 				}
 				continue
 			}
 
 			hashes := hasher.Hashes(ctx, photoURLs(item))
 			if rec, reason, dup := seen.Duplicate(item, hashes); dup {
-				log.Info("duplicate", "title", item.Title, "of", rec.Title, "why", reason, "search", search.Name())
+				log.Info("duplicate", "title", item.Title, "of", rec.Title, "why", reason, "search", search.Name)
 				res.Duplicates++
 				// Marked as a copy of the one that was announced, which is what keeps its
 				// price drops quiet too.
@@ -196,10 +200,10 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 				if rec.CopyOf != "" {
 					owner = rec.CopyOf
 				}
-				seen.AddCopy(item, hashes, search.Name(), owner, now)
+				seen.AddCopy(item, hashes, search.Name, owner, now)
 				continue
 			}
-			seen.Add(item, hashes, search.Name(), now)
+			seen.Add(item, hashes, search.Name, now)
 
 			switch {
 			case firstPass, opt.MaxAge > 0 && now.Sub(item.Created()) > opt.MaxAge:
@@ -208,7 +212,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 				res.Held++
 			default:
 				res.New = append(res.New, Hit{
-					Search: search.Name(), Title: item.Title,
+					Search: search.Name, Title: item.Title,
 					Price: item.Price.Amount, City: item.Where(), URL: item.URL(),
 				})
 				if notify == nil {
@@ -216,7 +220,7 @@ func Run(ctx context.Context, client *wallapop.Client, seen *Seen, notify Notifi
 				}
 				if err := notify.Listing(ctx, search, item); err != nil {
 					log.Error("could not send the message", "title", item.Title, "err", err)
-					res.Failures = append(res.Failures, Failure{Search: search.Name(), Error: err.Error()})
+					res.Failures = append(res.Failures, Failure{Search: search.Name, Error: err.Error()})
 				}
 			}
 		}
@@ -253,7 +257,8 @@ func photoURLs(item wallapop.SearchItem) []string {
 	return urls
 }
 
-func pause(ctx context.Context, min, max time.Duration) error {
+// Pause is a random wait, so the searches of a round do not go out like a metronome.
+func Pause(ctx context.Context, min, max time.Duration) error {
 	wait := min
 	if max > min {
 		wait += rand.N(max - min)

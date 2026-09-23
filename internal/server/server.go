@@ -83,9 +83,6 @@ func (h *Health) Handler() http.Handler {
 		// tried again in minutes and is nobody's emergency.
 		if res, ok := watch.LoadResult(h.DataDir); ok {
 			body.LastWatch = &res
-			if res.NeedsHuman && body.Status == "ok" {
-				down("the last round of searches needs a human: " + res.Error)
-			}
 		}
 		if h.NextRun != nil {
 			if next := h.NextRun(); !next.IsZero() {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -30,13 +31,13 @@ type recorder struct {
 	said     []string
 }
 
-func (r *recorder) Listing(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem) error {
-	r.listings = append(r.listings, search.Name()+"|"+item.Title)
+func (r *recorder) Listing(_ context.Context, search Search, item wallapop.SearchItem) error {
+	r.listings = append(r.listings, search.Name+"|"+item.Title)
 	return nil
 }
 
-func (r *recorder) Cheaper(_ context.Context, search wallapop.SavedSearch, item wallapop.SearchItem, before float64) error {
-	r.cheaper = append(r.cheaper, fmt.Sprintf("%s|%s|%.0f→%.0f", search.Name(), item.Title, before, item.Price.Amount))
+func (r *recorder) Cheaper(_ context.Context, search Search, item wallapop.SearchItem, before float64) error {
+	r.cheaper = append(r.cheaper, fmt.Sprintf("%s|%s|%.0f→%.0f", search.Name, item.Title, before, item.Price.Amount))
 	return nil
 }
 
@@ -45,11 +46,10 @@ func (r *recorder) Say(_ context.Context, text string) error {
 	return nil
 }
 
-// fakeWallapop answers the two calls a round makes, plus the photos.
+// fakeWallapop answers the search a round makes, plus the photos.
 type fakeWallapop struct {
-	searches []wallapop.SavedSearch
-	items    []wallapop.SearchItem
-	queries  []string
+	items   []wallapop.SearchItem
+	queries []string
 	// secondPage, when set, is served behind a cursor the way a long search answers.
 	secondPage []wallapop.SearchItem
 	// url is where the fake listens, so photo links in the fixtures are absolute.
@@ -62,12 +62,6 @@ func (f *fakeWallapop) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.URL.Path == wallapop.PathSavedSearches:
-			if r.Header.Get("Authorization") == "" {
-				http.Error(w, "no bearer", http.StatusUnauthorized)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(f.searches)
 		case r.URL.Path == wallapop.PathSearch:
 			// The catalogue search must go out anonymous: a bearer here would tie the
 			// watching to the account.
@@ -108,10 +102,8 @@ func (f *fakeWallapop) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func newSearch(id, title string, enabled bool) wallapop.SavedSearch {
-	s := wallapop.SavedSearch{ID: id, Title: title, Query: map[string]any{"keywords": title, "max_sale_price": 200.0}}
-	s.Alert.Enabled = enabled
-	return s
+func newSearch(id, title string) Search {
+	return Search{ID: id, Name: title, Query: wallapop.Searchable(url.Values{"keywords": {title}})}
 }
 
 func newItem(id, title string, price float64, age time.Duration, photo string) wallapop.SearchItem {
@@ -134,9 +126,8 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 
 // The first round of a search is silence: everything on that page was already there.
 func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
-	fake := &fakeWallapop{
-		searches: []wallapop.SavedSearch{newSearch("s1", "kallax", true)},
-	}
+	searches := []Search{newSearch("s1", "kallax")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	fake.items = []wallapop.SearchItem{
 		newItem("a", "Estantería Kallax", 40, time.Minute, fake.photo("a")),
@@ -145,7 +136,7 @@ func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	if len(notify.listings) != 0 {
 		t.Fatalf("the first round announced %v", notify.listings)
@@ -156,7 +147,7 @@ func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 
 	// Second round, one genuinely new listing.
 	fake.items = append(fake.items, newItem("c", "Kallax 2 puertas", 75, time.Minute, fake.photo("c")))
-	res = Run(context.Background(), client, seen, notify, opt, quiet())
+	res = Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.listings) != 1 || !strings.HasSuffix(notify.listings[0], "Kallax 2 puertas") {
 		t.Fatalf("the second round announced %v", notify.listings)
 	}
@@ -165,46 +156,23 @@ func TestFirstRoundSeedsWithoutSpeaking(t *testing.T) {
 	}
 }
 
-// A search whose alert is off in the app is not watched, and nothing turns it back on.
-func TestAlertOffIsLeftAlone(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{
-		newSearch("s1", "kallax", true),
-		newSearch("s2", "bmw f800gs", false),
-	}}
-	client, opt := newWatcher(t, fake)
-	fake.items = []wallapop.SearchItem{newItem("a", "Something", 10, time.Minute, fake.photo("a"))}
-
-	seen, _ := LoadSeen(t.TempDir())
-	res := Run(context.Background(), client, seen, &recorder{}, opt, quiet())
-	if res.Watched != 1 || res.Ignored != 1 {
-		t.Fatalf("watched=%d ignored=%d, expected 1 and 1", res.Watched, res.Ignored)
-	}
-	if len(fake.queries) != 1 {
-		t.Fatalf("%d searches were run, expected 1", len(fake.queries))
-	}
-
-	res = Run(context.Background(), client, seen, &recorder{}, Options{All: true, MaxAge: time.Hour, PhotosPerItem: 1}, quiet())
-	if res.Watched != 2 {
-		t.Fatalf("with --all, watched=%d, expected 2", res.Watched)
-	}
-}
-
 // The same advert reposted by another account from another town is announced once.
 func TestReposetdListingIsAnnouncedOnce(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	fake.items = []wallapop.SearchItem{newItem("seed", "Otra moto cualquiera", 3000, time.Minute, fake.photo("z"))}
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	// Both carry the same photograph, and the price barely moves.
 	first := newItem("m1", "YAMAHA XSR 900 (A2)", 8780, time.Minute, fake.photo("same"))
 	second := newItem("m2", "Yamaha XSR900 A2 impecable", 8800, time.Minute, fake.photo("same"))
 	fake.items = append(fake.items, first, second)
 
-	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.listings) != 1 {
 		t.Fatalf("announced %v, expected one of the two copies", notify.listings)
 	}
@@ -214,20 +182,21 @@ func TestReposetdListingIsAnnouncedOnce(t *testing.T) {
 }
 
 func TestFloodIsCapped(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "kallax", true)}}
+	searches := []Search{newSearch("s1", "kallax")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	opt.MaxAlerts = 2
 	fake.items = []wallapop.SearchItem{newItem("seed", "Algo", 10, time.Minute, fake.photo("seed"))}
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	for i := 0; i < 5; i++ {
 		fake.items = append(fake.items, newItem(fmt.Sprintf("n%d", i),
 			fmt.Sprintf("Cosa distinta numero %d", i), float64(100+i*40), time.Minute, fake.photo(fmt.Sprintf("p%d", i))))
 	}
-	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	if len(notify.listings) != 2 {
 		t.Fatalf("sent %d messages, expected the cap of 2", len(notify.listings))
@@ -252,39 +221,10 @@ func TestLine(t *testing.T) {
 	}
 }
 
-// A silenced search is not read at all: the app still has its alert on, this just has
-// nothing to say about it.
-func TestSilencedSearchIsSkipped(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{
-		newSearch("s1", "kallax", true),
-		newSearch("s2", "motos", true),
-	}}
-	client, opt := newWatcher(t, fake)
-	fake.items = []wallapop.SearchItem{newItem("a", "Algo nuevo", 10, time.Minute, fake.photo("a"))}
-
-	mutes, err := LoadMutes(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := mutes.Toggle("s2", "motos"); err != nil {
-		t.Fatal(err)
-	}
-	opt.Mutes = mutes
-
-	seen, _ := LoadSeen(t.TempDir())
-	res := Run(context.Background(), client, seen, &recorder{}, opt, quiet())
-
-	if res.Watched != 1 || res.Silenced != 1 {
-		t.Fatalf("watched=%d silenced=%d, expected 1 and 1", res.Watched, res.Silenced)
-	}
-	if len(fake.queries) != 1 {
-		t.Fatalf("%d searches were run, expected only the one that is not silenced", len(fake.queries))
-	}
-}
-
 // A listing already seen is not news, but the same thing cheaper than it has ever been is.
 func TestPriceDropIsAnnouncedOnce(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	opt.Drop = 0.05
 	bike := newItem("m1", "Yamaha XSR900", 9000, time.Minute, fake.photo("m1"))
@@ -292,12 +232,12 @@ func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	// Down 8%: worth saying.
 	bike.Price.Amount = 8300
 	fake.items = []wallapop.SearchItem{bike}
-	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.cheaper) != 1 || !strings.Contains(notify.cheaper[0], "9000→8300") {
 		t.Fatalf("the drop was announced as %v", notify.cheaper)
 	}
@@ -306,7 +246,7 @@ func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 	}
 
 	// The same price again is the same news, and news is told once.
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.cheaper) != 1 {
 		t.Fatalf("the same drop was announced twice: %v", notify.cheaper)
 	}
@@ -314,17 +254,18 @@ func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 	// Back up and down again to where it already was: still the same news.
 	bike.Price.Amount = 9000
 	fake.items = []wallapop.SearchItem{bike}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	bike.Price.Amount = 8300
 	fake.items = []wallapop.SearchItem{bike}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.cheaper) != 1 {
 		t.Fatalf("a price bouncing back to a known low was announced again: %v", notify.cheaper)
 	}
 }
 
 func TestSmallDropIsNotWorthAMessage(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	opt.Drop = 0.05
 	bike := newItem("m1", "Yamaha XSR900", 9000, time.Minute, fake.photo("m1"))
@@ -332,11 +273,11 @@ func TestSmallDropIsNotWorthAMessage(t *testing.T) {
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	bike.Price.Amount = 8800 // 2.2%
 	fake.items = []wallapop.SearchItem{bike}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if len(notify.cheaper) != 0 {
 		t.Fatalf("a 2%% haircut was announced: %v", notify.cheaper)
 	}
@@ -345,7 +286,8 @@ func TestSmallDropIsNotWorthAMessage(t *testing.T) {
 // Eleven accounts repricing one van is one piece of news, and it belongs to the listing
 // that was announced.
 func TestACopyDropsInSilence(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	opt.Drop = 0.05
 
@@ -355,7 +297,7 @@ func TestACopyDropsInSilence(t *testing.T) {
 
 	seen, _ := LoadSeen(t.TempDir())
 	notify := &recorder{}
-	res := Run(context.Background(), client, seen, notify, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, notify, opt, quiet())
 	if res.Duplicates != 1 {
 		t.Fatalf("the copy was not folded: %+v", res)
 	}
@@ -364,7 +306,7 @@ func TestACopyDropsInSilence(t *testing.T) {
 	first.Price.Amount = 7900
 	copyOf.Price.Amount = 7900
 	fake.items = []wallapop.SearchItem{first, copyOf}
-	Run(context.Background(), client, seen, notify, opt, quiet())
+	Run(context.Background(), client, seen, searches, notify, opt, quiet())
 
 	if len(notify.cheaper) != 1 {
 		t.Fatalf("expected one message for the drop, got %v", notify.cheaper)
@@ -374,21 +316,51 @@ func TestACopyDropsInSilence(t *testing.T) {
 	}
 }
 
-// A page is 40 listings and a saved search can hold more: the tail has to be read too, or
+// A page is 40 listings and a search can hold more: the tail has to be read too, or
 // the listings in it are never seen to change price.
 func TestSearchFollowsTheCursor(t *testing.T) {
-	fake := &fakeWallapop{searches: []wallapop.SavedSearch{newSearch("s1", "motos", true)}}
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
 	client, opt := newWatcher(t, fake)
 	fake.items = []wallapop.SearchItem{newItem("a", "Primera pagina", 100, time.Minute, fake.photo("a"))}
 	fake.secondPage = []wallapop.SearchItem{newItem("b", "Segunda pagina", 200, time.Minute, fake.photo("b"))}
 
 	seen, _ := LoadSeen(t.TempDir())
-	res := Run(context.Background(), client, seen, &recorder{}, opt, quiet())
+	res := Run(context.Background(), client, seen, searches, &recorder{}, opt, quiet())
 
 	if res.Scanned != 2 {
 		t.Fatalf("scanned = %d, expected both pages", res.Scanned)
 	}
 	if !seen.Known("b") {
 		t.Error("the listing on the second page was never read")
+	}
+}
+
+// Between deep rounds only the first page is read: the search is ordered by newest, so
+// anything new is on it, and the other pages are requests for listings already known.
+func TestOnlyTheFirstPageIsReadBetweenDeepRounds(t *testing.T) {
+	searches := []Search{newSearch("s1", "motos")}
+	fake := &fakeWallapop{}
+	client, opt := newWatcher(t, fake)
+	fake.items = []wallapop.SearchItem{newItem("a", "Primera pagina", 100, time.Minute, fake.photo("a"))}
+	fake.secondPage = []wallapop.SearchItem{newItem("b", "Segunda pagina", 200, time.Minute, fake.photo("b"))}
+
+	seen, _ := LoadSeen(t.TempDir())
+	Run(context.Background(), client, seen, searches, &recorder{}, opt, quiet())
+	if len(fake.queries) != 2 {
+		t.Fatalf("the first round of a search read %d pages, expected all of them", len(fake.queries))
+	}
+
+	fake.queries = nil
+	Run(context.Background(), client, seen, searches, &recorder{}, opt, quiet())
+	if len(fake.queries) != 1 {
+		t.Fatalf("a shallow round read %d pages, expected 1", len(fake.queries))
+	}
+
+	fake.queries = nil
+	opt.Deep = true
+	Run(context.Background(), client, seen, searches, &recorder{}, opt, quiet())
+	if len(fake.queries) != 2 {
+		t.Fatalf("a deep round read %d pages, expected all of them", len(fake.queries))
 	}
 }

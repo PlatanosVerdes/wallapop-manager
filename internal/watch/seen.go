@@ -1,4 +1,4 @@
-// Package watch follows the saved searches and says what has just appeared. The hard part
+// Package watch follows the searches and says what has just appeared. The hard part
 // is not finding new listings: it is deciding that two of them are the same thing.
 package watch
 
@@ -58,7 +58,7 @@ type Record struct {
 }
 
 type Seen struct {
-	// Searches remembers when each saved search was first watched. A search seen for the
+	// Searches remembers when each search was first watched. A search seen for the
 	// first time is recorded in silence: its whole first page is old news.
 	Searches map[string]time.Time `json:"searches"`
 	Records  []Record             `json:"records"`
