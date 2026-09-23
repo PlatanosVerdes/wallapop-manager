@@ -321,10 +321,9 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	if item.Reserved != nil && item.Reserved.Flag {
 		b.WriteString(" · <i>reservado</i>")
 	}
-	// The bot is shared with the other small services, so the message says who is talking.
 	// The listing's own address hangs from a button instead of sitting in the text.
 	if search != "" {
-		fmt.Fprintf(&b, "\n<i>🔎 wallapop · %s</i>", escape(search))
+		fmt.Fprintf(&b, "\n<i>🔎 %s</i>", escape(search))
 	}
 	return b.String()
 }
@@ -346,7 +345,7 @@ func CheaperLine(search string, item wallapop.SearchItem, before float64, escape
 		fmt.Fprintf(&b, "\n%s", escape(where))
 	}
 	if search != "" {
-		fmt.Fprintf(&b, "\n<i>🔎 wallapop · %s</i>", escape(search))
+		fmt.Fprintf(&b, "\n<i>🔎 %s</i>", escape(search))
 	}
 	return b.String()
 }

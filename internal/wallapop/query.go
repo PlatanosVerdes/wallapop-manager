@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	ErrNotASearch = errors.New("no es la direccion de una busqueda de Wallapop")
-	ErrNoFilter   = errors.New("esa busqueda no filtra nada: le falta un texto, una categoria o una marca")
+	ErrNotASearch = errors.New("eso no es el enlace de una búsqueda de Wallapop")
+	ErrNoFilter   = errors.New("esa búsqueda no filtra nada: ponle un texto, una categoría o una marca")
 )
 
 // dropped are the parameters that describe how the page was reached rather than what is
