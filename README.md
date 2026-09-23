@@ -10,7 +10,7 @@ Runs on the Raspberry from [rpi-services](https://github.com/PlatanosVerdes/rpi-
 ## The bot
 
 1. `/start` to join.
-2. Write what you are looking for. A price and a radius are picked out of the text:
+2. Write what you are looking for. The bot shows what it understood and saves it on ✅ (a greeting gets a joke instead). `/nueva <search>` saves it without asking, and `/nueva` alone waits for the next message. A price and a radius are picked out of the text:
 
    | Written | Searches |
    | :--- | :--- |
@@ -23,6 +23,8 @@ Runs on the Raspberry from [rpi-services](https://github.com/PlatanosVerdes/rpi-
 
    The town after the last `en` is looked up on OpenStreetMap; when it is no town (`funda en piel`), it stays part of the text.
 3. Optional: send a location (📎 → Location, any point on the map) to move the latest search there, 30 km unless the text said otherwise.
+
+A listing shared from the app (`wallapop.com/item/...`) becomes a search for things like it: the first three words of its title, in its category, up to 20% dearer. It is shown for ✅ too.
 
 For filters the text cannot say (category, condition, brand and model), make the search on es.wallapop.com in a phone browser (typed in the address bar, so it does not jump to the app) and paste its address. Whatever is written next to it is the name, e.g. `coches top https://es.wallapop.com/search?...`
 

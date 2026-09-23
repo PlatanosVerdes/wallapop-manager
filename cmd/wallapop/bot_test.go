@@ -87,19 +87,79 @@ func TestAPastedAddressBecomesASearch(t *testing.T) {
 	}
 }
 
-// The phone app cannot share a search, so it can be written out instead.
-func TestAWrittenSearchIsStored(t *testing.T) {
+// A search written out is shown as understood, and saved on the ✅: a chat is also where
+// people just talk.
+func TestAWrittenSearchWaitsForItsTick(t *testing.T) {
 	b := newBot(t)
-	reply, err := b.onText(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: "bici 100-300"})
+	ctx := context.Background()
+	reply, err := b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 100}, Args: "bici 100-300"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply.Text, "de 100 a 300") || !strings.Contains(reply.Text, "ubicación") {
+	if !strings.Contains(reply.Text, "¿Vigilo esto?") || !strings.Contains(reply.Text, "de 100 a 300") {
 		t.Fatalf("the answer was %q", reply.Text)
+	}
+	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 0 {
+		t.Fatalf("saved before the tick: %+v", user.Searches)
+	}
+
+	watchKey := reply.Keys.Rows[0][0].Data
+	if _, _, err := b.onButton(ctx, ownerChat, watchKey); err != nil {
+		t.Fatal(err)
 	}
 	user, _ := b.people.Get(ownerChat)
 	if len(user.Searches) != 1 || user.Searches[0].Name != "bici" {
 		t.Fatalf("stored %+v", user.Searches)
+	}
+	if notice, _, _ := b.onButton(ctx, ownerChat, watchKey); !strings.Contains(notice, "olvidado") {
+		t.Errorf("a second press gave %q", notice)
+	}
+}
+
+// An older card cannot save the search shown after it.
+func TestAnOlderCardSavesNothing(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	owner := telegram.Chat{ID: 100}
+	first, _ := b.onText(ctx, commands.Request{Chat: owner, Args: "kallax"})
+	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "bici"})
+	_, _, _ = b.onButton(ctx, ownerChat, first.Keys.Rows[0][0].Data)
+	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 0 {
+		t.Fatalf("the old card saved %+v", user.Searches)
+	}
+}
+
+func TestSmallTalkIsNoSearch(t *testing.T) {
+	b := newBot(t)
+	for _, text := range []string{"hola", "Gracias!!", "jajaja", "👍", "buenas noches"} {
+		reply, _ := b.onText(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: text})
+		if strings.Contains(reply.Text, "¿Vigilo") || reply.Keys != nil {
+			t.Errorf("%q was taken as a search: %q", text, reply.Text)
+		}
+	}
+	for _, text := range []string{"bici", "ps5", "no frost"} {
+		if smallTalk(text) {
+			t.Errorf("%q was taken as small talk", text)
+		}
+	}
+}
+
+// /nueva alone asks, and the answer is saved without a card.
+func TestNuevaAloneTakesTheNextMessage(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	owner := telegram.Chat{ID: 100}
+	for _, cmd := range b.commands(&commands.Listener{}) {
+		if cmd.Name == "nueva" {
+			_, _ = cmd.Run(ctx, commands.Request{Chat: owner})
+		}
+	}
+	reply, err := b.onText(ctx, commands.Request{Chat: owner, Args: "hola"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user, _ := b.people.Get(ownerChat); len(user.Searches) != 1 || !strings.Contains(reply.Text, "Guardada") {
+		t.Fatalf("the answer was %q, stored %+v", reply.Text, user.Searches)
 	}
 }
 
@@ -109,8 +169,8 @@ func TestALocationNarrowsTheLatestSearch(t *testing.T) {
 	b := newBot(t)
 	ctx := context.Background()
 	owner := telegram.Chat{ID: 100}
-	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "kallax"})
-	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "bici a 10 km"})
+	_, _ = addSearch(ctx, b.cfg, b.people, ownerChat, "kallax", "")
+	_, _ = addSearch(ctx, b.cfg, b.people, ownerChat, "bici a 10 km", "")
 	before, _ := b.people.Get(ownerChat)
 
 	reply, err := b.onText(ctx, commands.Request{Chat: owner, Location: &telegram.Location{Latitude: 41.38, Longitude: 2.17}})
