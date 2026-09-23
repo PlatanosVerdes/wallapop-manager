@@ -29,7 +29,7 @@ Entry for its `docker-compose.yml`:
       WALLA_PUSHGATEWAY: http://pushgateway:9091
       # A bot of its own: this service is the only reader of its updates.
       WALLA_TELEGRAM_TOKEN: ${WALLA_TELEGRAM_TOKEN}
-      # The owner's chat, which keeps what was seen before the bot had users.
+      # The owner's chat, always a user of the bot.
       WALLA_TELEGRAM_CHAT: ${WALLA_TELEGRAM_CHAT}
     volumes:
       # The session, the users and what has been seen for each of them.

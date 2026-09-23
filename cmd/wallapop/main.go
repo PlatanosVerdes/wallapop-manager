@@ -149,7 +149,7 @@ func cmdServe(cfg config.Config, store *session.Store, log *slog.Logger, args []
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	people, err := loadUsers(cfg, log)
+	people, err := loadUsers(cfg)
 	if err != nil {
 		return err
 	}
@@ -260,9 +260,8 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// loadUsers reads who uses the bot, and makes sure the owner is one of them: what was seen
-// before the bot had users was the owner's, and it moves into the owner's folder.
-func loadUsers(cfg config.Config, log *slog.Logger) (*users.Store, error) {
+// loadUsers reads who uses the bot, with the owner always among them.
+func loadUsers(cfg config.Config) (*users.Store, error) {
 	people, err := users.Load(cfg.DataDir)
 	if err != nil {
 		return nil, err
@@ -272,20 +271,6 @@ func loadUsers(cfg config.Config, log *slog.Logger) (*users.Store, error) {
 	}
 	if _, err := people.Request(cfg.TelegramChat, "owner", true, time.Now()); err != nil {
 		return nil, err
-	}
-	// Before the bot had users, what had been seen was the owner's alone.
-	old := filepath.Join(cfg.DataDir, "seen.json")
-	moved := filepath.Join(userDir(cfg, cfg.TelegramChat), "seen.json")
-	if _, err := os.Stat(old); err == nil {
-		if _, err := os.Stat(moved); os.IsNotExist(err) {
-			if err := os.MkdirAll(filepath.Dir(moved), 0o755); err != nil {
-				return nil, err
-			}
-			if err := os.Rename(old, moved); err != nil {
-				return nil, err
-			}
-			log.Info("what had been seen now belongs to the owner", "path", moved)
-		}
 	}
 	return people, nil
 }
@@ -307,7 +292,7 @@ func cmdWatch(cfg config.Config, log *slog.Logger, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	people, err := loadUsers(cfg, log)
+	people, err := loadUsers(cfg)
 	if err != nil {
 		return err
 	}
@@ -322,7 +307,7 @@ func cmdWatch(cfg config.Config, log *slog.Logger, args []string) error {
 // cmdSearches is the terminal view of who uses the bot and what they look for, and the way
 // to give somebody a search without going through Telegram.
 func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
-	people, err := loadUsers(cfg, log)
+	people, err := loadUsers(cfg)
 	if err != nil {
 		return err
 	}

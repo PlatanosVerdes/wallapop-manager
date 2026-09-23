@@ -3,8 +3,6 @@ package users
 import (
 	"errors"
 	"net/url"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -110,23 +108,5 @@ func TestAnotherWriterIsNotLost(t *testing.T) {
 	again, _ := Load(dir)
 	if user, _ := again.Get("1"); len(user.Searches) != 2 {
 		t.Fatalf("a write from the service lost the terminal's: %+v", user.Searches)
-	}
-}
-
-func TestTheOldFileIsKept(t *testing.T) {
-	dir := t.TempDir()
-	old := `[{"chat": "1", "name": "Ana", "active": true, "since": "2026-09-23T15:00:00Z"}]`
-	if err := os.WriteFile(filepath.Join(dir, "users.json"), []byte(old), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !store.IsActive("1") {
-		t.Fatal("the chats in users.json were lost")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "searches.json")); err != nil {
-		t.Fatalf("searches.json is not there: %v", err)
 	}
 }

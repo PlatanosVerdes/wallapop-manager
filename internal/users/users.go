@@ -59,12 +59,6 @@ type Store struct {
 
 func Load(dir string) (*Store, error) {
 	store := &Store{path: filepath.Join(dir, "searches.json"), users: map[string]*User{}}
-	// The file was called users.json before, and what is in it is kept.
-	if _, err := os.Stat(store.path); os.IsNotExist(err) {
-		if err := os.Rename(filepath.Join(dir, "users.json"), store.path); err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
 	if err := store.refresh(); err != nil {
 		return nil, err
 	}

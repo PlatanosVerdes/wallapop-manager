@@ -237,7 +237,7 @@ The watcher:
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
 | `WALLA_TELEGRAM_TOKEN` | – | Bot token. Empty means the watcher runs and announces nothing |
-| `WALLA_TELEGRAM_CHAT` | – | The owner's chat, created on start so the searches seen before the bot had users are kept |
+| `WALLA_TELEGRAM_CHAT` | – | The owner's chat, always a user of the bot |
 | `WALLA_MAX_SEARCHES` | `3` | Searches one chat may keep |
 | `WALLA_MAX_USERS` | `20` | Chats that may join |
 | `WALLA_WATCH_MIN` / `WALLA_WATCH_MAX` | `5m` / `15m` | The round is run after a random wait in this range, so the pattern is not a metronome |
