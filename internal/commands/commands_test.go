@@ -213,7 +213,7 @@ func TestFailedCommandAnswersWhy(t *testing.T) {
 	sent := listen(t, fake, []Command{
 		{Name: "ahora", Run: func(context.Context, Request) (Reply, error) { return Reply{}, ErrBusy }},
 	})
-	if len(sent) != 1 || !strings.Contains(sent[0], "ronda en marcha") {
+	if len(sent) != 1 || !strings.Contains(sent[0], "ya estoy buscando") {
 		t.Fatalf("answers were %v", sent)
 	}
 }
@@ -223,7 +223,7 @@ func TestHelpIsBuiltFromTheTable(t *testing.T) {
 		{Name: "estado", Help: "estado"},
 		{Name: "ahora", Help: "mira ahora"},
 	})
-	for _, want := range []string{"/estado\n<i>estado</i>", "/ahora\n<i>mira ahora</i>"} {
+	for _, want := range []string{"/estado · estado", "/ahora · mira ahora"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help does not carry %q:\n%s", want, got)
 		}

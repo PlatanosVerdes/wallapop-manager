@@ -157,7 +157,7 @@ search made without a location covers the whole country.
 | :--- | :--- |
 | `/busquedas` | Your searches, each with a bell that silences it or gives it back, a pencil that renames it, and a bin that deletes it after asking |
 | `/nueva [name] <address>` | The same as pasting the address |
-| `/ahora` | Runs your searches now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
+| `/ahora` | Runs your searches now. Answers `ya estoy buscando` rather than queueing behind a round already running |
 | `/baja` | Deletes your searches and what was seen for you, after asking |
 | `/ayuda` | The list, built from the same table the bot dispatches from |
 

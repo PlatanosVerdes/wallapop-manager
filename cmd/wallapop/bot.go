@@ -68,20 +68,20 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 	return []commands.Command{
 		{
 			Name: "start",
-			Help: "darte de alta",
+			Help: "Empezar",
 			Open: true,
 			Run:  b.start,
 		},
 		{
 			Name: "nueva",
-			Help: "guarda una busqueda: un nombre si quieres y la direccion de una busqueda hecha en la web",
+			Help: "Guardar una búsqueda",
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
 				return b.onText(context.Background(), req)
 			},
 		},
 		{
 			Name: "busquedas",
-			Help: "tus busquedas, para silenciarlas, renombrarlas o eliminarlas",
+			Help: "Ver y editar tus búsquedas",
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
 				user, _ := b.people.Get(req.ChatID())
 				return commands.Reply{Text: searchesText(user, b.cfg.MaxSearches), Keys: searchKeys(user)}, nil
@@ -89,7 +89,7 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		},
 		{
 			Name: "ahora",
-			Help: "mira tus busquedas ahora, sin esperar al reloj",
+			Help: "Buscar ahora",
 			Run: func(ctx context.Context, req commands.Request) (commands.Reply, error) {
 				// A command would rather be told no than queue behind a round that is
 				// already doing the very thing it asked for.
@@ -104,12 +104,12 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		},
 		{
 			Name: "baja",
-			Help: "borra tus busquedas y te da de baja",
+			Help: "Darte de baja",
 			Run: func(context.Context, commands.Request) (commands.Reply, error) {
 				return commands.Reply{
-					Text: "¿Te doy de baja? Se borran tus busquedas y lo que he visto para ti.",
+					Text: "¿Te doy de baja? Se borrarán tus búsquedas.",
 					Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
-						{Text: "Si, dame de baja", Data: buttonLeave, Style: "danger"},
+						{Text: "Sí, darme de baja", Data: buttonLeave, Style: "danger"},
 						{Text: "No", Data: buttonStay},
 					}}},
 				}, nil
@@ -117,17 +117,19 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		},
 		{
 			Name: "ayuda",
-			Help: "esto",
+			Help: "Cómo funciona",
 			Run: func(context.Context, commands.Request) (commands.Reply, error) {
-				return commands.Say(commands.Help(listener.Commands) + "\n\n" + howToAdd), nil
+				return commands.Say(intro + "\n\n" + howToAdd + "\n\n" + commands.Help(listener.Commands)), nil
 			},
 		},
 	}
 }
 
-const howToAdd = "<i>Para guardar una busqueda, hazla en es.wallapop.com con los filtros que quieras " +
-	"y pegame aqui la direccion de la pagina. Si escribes algo al lado, por ejemplo " +
-	"\"coches top\" y la direccion, la busqueda se llama asi.</i>"
+const (
+	intro    = "Te aviso cuando sale algo nuevo en tus búsquedas de Wallapop."
+	howToAdd = "<i>Haz la búsqueda en es.wallapop.com y pégame el enlace. " +
+		"Si le pones un nombre delante, se llama así.</i>"
+)
 
 // start is the only command a stranger can run, and all it takes to join.
 func (b *botState) start(_ context.Context, req commands.Request) (commands.Reply, error) {
@@ -136,18 +138,18 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 		if err := b.people.Rename(chat, name); err != nil {
 			return commands.Reply{}, err
 		}
-		return commands.Say("👋 Ya estas dentro.\n\n" + howToAdd), nil
+		return commands.Say("👋 Ya estás dentro.\n\n" + howToAdd), nil
 	}
 
 	if len(b.people.All()) >= b.cfg.MaxUsers {
 		b.log.Warn("somebody could not join, the bot is full", "chat", chat, "name", name)
-		return commands.Say("Lo siento, el bot esta lleno."), nil
+		return commands.Say("El bot está lleno, lo siento."), nil
 	}
 	if _, err := b.people.Request(chat, name, true, time.Now()); err != nil {
 		return commands.Reply{}, err
 	}
 	b.log.Info("a chat joined", "chat", chat, "name", name)
-	return commands.Say("👋 Hola. " + howToAdd + "\n\n/ayuda para el resto."), nil
+	return commands.Say("👋 ¡Hola! " + intro + "\n\n" + howToAdd), nil
 }
 
 // onText takes a pasted address as a new search, which is the whole of adding one from a
@@ -173,7 +175,7 @@ func (b *botState) rename(chat, id, name string) (commands.Reply, error) {
 		name = string(runes[:nameLimit])
 	}
 	if name == "" {
-		return commands.Say("Sin nombre no puedo. Pulsa el lapiz otra vez en /busquedas."), nil
+		return commands.Say("Necesito un nombre. Pulsa ✏️ otra vez en /busquedas."), nil
 	}
 	search, err := b.people.RenameSearch(chat, id, name)
 	if err != nil {
@@ -193,15 +195,14 @@ func (b *botState) add(chat, address, name string) (commands.Reply, error) {
 	var t strings.Builder
 	fmt.Fprintf(&t, "✅ Guardada <b>%s</b>\n", telegram.Escape(search.Name))
 	if km := wallapop.RadiusKm(query); km != "" {
-		fmt.Fprintf(&t, "📍 a %s km como mucho\n", telegram.Escape(km))
+		fmt.Fprintf(&t, "📍 hasta %s km\n", telegram.Escape(km))
 	} else {
 		t.WriteString("📍 toda España\n")
 	}
 	if price := priceRange(query.Get("min_sale_price"), query.Get("max_sale_price")); price != "" {
 		fmt.Fprintf(&t, "💶 %s\n", price)
 	}
-	fmt.Fprintf(&t, "\n<i>Lo que ya esta publicado lo apunto sin avisar; desde ahora te llega lo nuevo. "+
-		"Llevas %d de %d.</i>", len(user.Searches), b.cfg.MaxSearches)
+	fmt.Fprintf(&t, "\n<i>Te aviso de lo nuevo a partir de ahora (%d/%d)</i>", len(user.Searches), b.cfg.MaxSearches)
 	return commands.Reply{Text: t.String(), Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
 		{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(query)},
 	}}}}, nil
@@ -250,7 +251,7 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		}
 		// The button that did it becomes the label saying it is done.
 		done := &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("🔕 " + search.Name + " silenciada")}}}
-		return "Silenciada " + search.Name + ". Se enciende otra vez desde /busquedas", done, nil
+		return "Silenciada. Se reactiva en /busquedas", done, nil
 
 	case buttonRename:
 		search, err := b.people.Search(chat, arg)
@@ -263,13 +264,13 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		}
 		b.renaming[chat] = renaming{search: search.ID, asked: time.Now()}
 		b.mu.Unlock()
-		ask := "✏️ ¿Como quieres llamar a <b>" + telegram.Escape(search.Name) + "</b>? Escribemelo."
+		ask := "✏️ ¿Qué nombre le pongo a <b>" + telegram.Escape(search.Name) + "</b>?"
 		if b.bot != nil {
 			if err := b.bot.To(chat).Text(ctx, ask, nil); err != nil {
 				return "", nil, err
 			}
 		}
-		return "Escribeme el nombre nuevo", nil, nil
+		return "Escríbeme el nombre", nil, nil
 
 	case buttonAskDelete:
 		search, err := b.people.Search(chat, arg)
@@ -295,7 +296,7 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 	case buttonLeave:
 		// A round in progress would write this chat's folder back after it is removed.
 		if !watching.TryLock() {
-			return commands.ErrBusy.Error() + ", prueba en un minuto", nil, nil
+			return commands.ErrBusy.Error(), nil, nil
 		}
 		defer watching.Unlock()
 		if err := b.people.Remove(chat); err != nil {
@@ -305,7 +306,7 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 			b.log.Error("could not remove what was seen for a chat that left", "chat", chat, "err", err)
 		}
 		b.log.Info("a chat left", "chat", chat)
-		return "Hecho", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("👋 Dado de baja")}}}, nil
+		return "Hecho", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("👋 Hecho, hasta pronto")}}}, nil
 
 	case buttonStay:
 		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Sigues dentro")}}}, nil
@@ -352,7 +353,7 @@ func searchKeys(user users.User) *telegram.Keyboard {
 
 func searchesText(user users.User, limit int) string {
 	if len(user.Searches) == 0 {
-		return "🔎 <b>No tienes busquedas</b>\n\n" + howToAdd
+		return "🔎 <b>Aún no tienes búsquedas</b>\n\n" + howToAdd
 	}
 	muted := 0
 	for _, search := range user.Searches {
@@ -361,11 +362,11 @@ func searchesText(user users.User, limit int) string {
 		}
 	}
 	var t strings.Builder
-	fmt.Fprintf(&t, "🔎 <b>Tus busquedas</b> · %d de %d\n", len(user.Searches), limit)
+	fmt.Fprintf(&t, "🔎 <b>Tus búsquedas</b> (%d/%d)", len(user.Searches), limit)
 	if muted > 0 {
-		fmt.Fprintf(&t, "%d silenciadas\n", muted)
+		fmt.Fprintf(&t, " · %d silenciadas", muted)
 	}
-	t.WriteString("<i>la campana silencia o devuelve, el lapiz cambia el nombre, la papelera elimina</i>")
+	t.WriteString("\n<i>🔔 silenciar · ✏️ renombrar · 🗑 eliminar</i>")
 	return t.String()
 }
 
@@ -373,21 +374,16 @@ func searchesText(user users.User, limit int) string {
 // that changed in bold, the rest as context.
 func htmlRound(res watch.Result) string {
 	if res.Error != "" {
-		return "⚠️ <b>La ronda ha fallado</b>\n" + telegram.Escape(res.Error)
+		return "⚠️ <b>No he podido buscar</b>\n" + telegram.Escape(res.Error)
 	}
 
 	var t strings.Builder
-	fmt.Fprintf(&t, "🔎 <b>Ronda de las %s</b>\n", res.StartedAt.Format("15:04"))
-	fmt.Fprintf(&t, "%d anuncios · <b>%d nuevos</b> · %d repetidos\n", res.Scanned, len(res.New), res.Duplicates)
+	if res.Watched == 0 {
+		return "🔎 No tienes búsquedas activas"
+	}
+	fmt.Fprintf(&t, "🔎 %d anuncios mirados · <b>%d nuevos</b>", res.Scanned, len(res.New))
 	if len(res.Cheaper) > 0 {
-		fmt.Fprintf(&t, "<b>%d han bajado de precio</b>\n", len(res.Cheaper))
-	}
-	fmt.Fprintf(&t, "%d busquedas vigiladas", res.Watched)
-	if res.Silenced > 0 {
-		fmt.Fprintf(&t, ", %d silenciadas", res.Silenced)
-	}
-	if res.Seeded > 0 {
-		fmt.Fprintf(&t, "\n<i>%d apuntados sin avisar: ya estaban ahi</i>", res.Seeded)
+		fmt.Fprintf(&t, " · <b>%d más baratos</b>", len(res.Cheaper))
 	}
 	for _, f := range res.Failures {
 		fmt.Fprintf(&t, "\n⚠️ %s: %s", telegram.Escape(f.Search), telegram.Escape(f.Error))

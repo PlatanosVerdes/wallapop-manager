@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	ErrUnknown       = errors.New("no estas dado de alta")
-	ErrNoSuchSearch  = errors.New("esa busqueda ya no existe")
-	ErrTooMany       = errors.New("ya tienes el maximo de busquedas")
-	ErrAlreadyExists = errors.New("ya tienes esa misma busqueda")
+	ErrUnknown       = errors.New("no estás dado de alta, escribe /start")
+	ErrNoSuchSearch  = errors.New("esa búsqueda ya no existe")
+	ErrTooMany       = errors.New("ya tienes el máximo de búsquedas")
+	ErrAlreadyExists = errors.New("ya tienes esa búsqueda")
 )
 
 type User struct {

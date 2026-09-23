@@ -173,7 +173,7 @@ func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 func (l *Listener) answer(ctx context.Context, chat, what string, run func() (Reply, error)) {
 	reply, err := run()
 	if err != nil {
-		reply = Reply{Text: "⚠️ no ha podido ser: " + telegram.Escape(err.Error())}
+		reply = Reply{Text: "⚠️ " + telegram.Escape(err.Error())}
 	}
 	if reply.Text == "" {
 		return
@@ -231,12 +231,11 @@ func parse(text string) (name, args string) {
 // Help is the answer to the help command, built from the table so it cannot drift from it.
 func Help(commands []Command) string {
 	var b strings.Builder
-	b.WriteString("🤖 <b>Lo que entiendo</b>\n\n")
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "/%s\n<i>%s</i>\n", cmd.Name, telegram.Escape(cmd.Help))
+		fmt.Fprintf(&b, "/%s · %s\n", cmd.Name, telegram.Escape(cmd.Help))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // ErrBusy is what a command answers when the round it would start is already running.
-var ErrBusy = errors.New("ya hay una ronda en marcha")
+var ErrBusy = errors.New("ya estoy buscando, prueba en un momento")
