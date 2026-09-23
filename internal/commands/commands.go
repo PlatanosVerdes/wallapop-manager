@@ -27,6 +27,8 @@ type Command struct {
 type Request struct {
 	Chat telegram.Chat
 	Args string
+	// Location is set when what was sent is a place and not text.
+	Location *telegram.Location
 }
 
 func (r Request) ChatID() string { return strconv.FormatInt(r.Chat.ID, 10) }
@@ -131,7 +133,7 @@ func (l *Listener) allowed(chat string) bool { return l.Allowed != nil && l.Allo
 func (l *Listener) handle(ctx context.Context, msg telegram.Message) {
 	chat := strconv.FormatInt(msg.Chat.ID, 10)
 	name, args := parse(msg.Text)
-	req := Request{Chat: msg.Chat, Args: args}
+	req := Request{Chat: msg.Chat, Args: args, Location: msg.Location}
 
 	// The lag is worth a number: what is felt as a slow bot is usually a command sent
 	// while the container was being replaced.

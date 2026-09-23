@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/PlatanosVerdes/wallapop-manager/internal/places"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/wallapop"
 )
 
@@ -58,6 +59,8 @@ type Config struct {
 	WatchMinPause time.Duration
 	WatchMaxPause time.Duration
 	SeenTTL       time.Duration
+	// PlacesURL is the geocoder that turns "en Sant Cugat" into a point. Empty turns it off.
+	PlacesURL string
 
 	LogJSON bool
 }
@@ -94,6 +97,7 @@ func Load() (Config, error) {
 		WatchMinPause:  duration("WALLA_WATCH_MIN_PAUSE", 3*time.Second),
 		WatchMaxPause:  duration("WALLA_WATCH_MAX_PAUSE", 15*time.Second),
 		SeenTTL:        duration("WALLA_SEEN_TTL", 30*24*time.Hour),
+		PlacesURL:      env("WALLA_PLACES_URL", places.DefaultURL),
 
 		LogJSON: env("WALLA_LOG_JSON", "") == "1",
 	}

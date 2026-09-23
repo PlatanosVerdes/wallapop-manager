@@ -76,8 +76,8 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		{
 			Name: "nueva",
 			Help: "Guardar una búsqueda",
-			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
-				return b.onText(context.Background(), req)
+			Run: func(ctx context.Context, req commands.Request) (commands.Reply, error) {
+				return b.onText(ctx, req)
 			},
 		},
 		{
@@ -128,9 +128,14 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 
 const (
 	intro    = "Te aviso cuando sale algo nuevo en tus búsquedas de Wallapop."
-	howToAdd = "<i>Haz la búsqueda en es.wallapop.com y pégame el enlace. " +
-		"Si le pones un nombre delante, se llama así.</i>"
+	howToAdd = "<i>Escríbeme lo que buscas: <b>bici 100-300</b>, <b>kallax hasta 40</b>, " +
+		"<b>sofá en Sant Cugat a 10 km</b>. O mándame una ubicación 📎 para mover ahí la última.\n\n" +
+		"Para más filtros, haz la búsqueda en es.wallapop.com desde el navegador y pégame el enlace; " +
+		"lo que escribas delante será su nombre.</i>"
 )
+
+// defaultRadiusKm is how far from a shared location a search reaches when it asked no radius.
+const defaultRadiusKm = 30
 
 // start is the only command a stranger can run, and all it takes to join.
 func (b *botState) start(_ context.Context, req commands.Request) (commands.Reply, error) {
@@ -153,21 +158,41 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 	return commands.Say("👋 ¡Hola! " + intro + "\n\n" + howToAdd), nil
 }
 
-// onText takes a pasted address as a new search, which is the whole of adding one from a
-// phone: copy the page, paste it here. Whatever is written around the address, before or
-// after it, is the name.
-func (b *botState) onText(_ context.Context, req commands.Request) (commands.Reply, error) {
+// onText takes whatever is not a command as a new search: a pasted address, with whatever
+// is written around it as the name, or the search written out. A shared location narrows
+// the latest search to around it.
+func (b *botState) onText(ctx context.Context, req commands.Request) (commands.Reply, error) {
+	if req.Location != nil {
+		return b.near(req.ChatID(), *req.Location)
+	}
 	id, renamingOne := b.pendingRename(req.ChatID())
 	for _, word := range strings.Fields(req.Args) {
 		if strings.Contains(word, "wallapop.com") {
 			name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
-			return b.add(req.ChatID(), word, name)
+			return b.add(ctx, req.ChatID(), word, name)
 		}
 	}
 	if renamingOne {
 		return b.rename(req.ChatID(), id, req.Args)
 	}
-	return commands.Say(howToAdd), nil
+	if strings.TrimSpace(req.Args) == "" {
+		return commands.Say(howToAdd), nil
+	}
+	return b.add(ctx, req.ChatID(), req.Args, "")
+}
+
+func (b *botState) near(chat string, at telegram.Location) (commands.Reply, error) {
+	user, _ := b.people.Get(chat)
+	if len(user.Searches) == 0 {
+		return commands.Say("Primero dime qué busco, y luego mándame la ubicación."), nil
+	}
+	latest := user.Searches[len(user.Searches)-1]
+	query := wallapop.Near(latest.Values(), at.Latitude, at.Longitude, defaultRadiusKm)
+	search, err := b.people.SetQuery(chat, latest.ID, "", query)
+	if err != nil {
+		return commands.Reply{}, err
+	}
+	return b.saved(chat, "📍 Ahora cerca de ti", search), nil
 }
 
 func (b *botState) rename(chat, id, name string) (commands.Reply, error) {
@@ -185,28 +210,37 @@ func (b *botState) rename(chat, id, name string) (commands.Reply, error) {
 	return commands.Say("✏️ Ahora se llama <b>" + telegram.Escape(search.Name) + "</b>"), nil
 }
 
-func (b *botState) add(chat, address, name string) (commands.Reply, error) {
-	search, err := addSearch(b.cfg, b.people, chat, address, name)
+func (b *botState) add(ctx context.Context, chat, address, name string) (commands.Reply, error) {
+	search, err := addSearch(ctx, b.cfg, b.people, chat, address, name)
 	if err != nil {
 		return commands.Reply{}, err
 	}
-	user, _ := b.people.Get(chat)
+	return b.saved(chat, "✅ Guardada", search), nil
+}
 
+func (b *botState) saved(chat, title string, search users.Search) commands.Reply {
+	user, _ := b.people.Get(chat)
 	query := search.Values()
 	var t strings.Builder
-	fmt.Fprintf(&t, "✅ Guardada <b>%s</b>\n", telegram.Escape(search.Name))
-	if km := wallapop.RadiusKm(query); km != "" {
+	fmt.Fprintf(&t, "%s <b>%s</b>\n", title, telegram.Escape(search.Name))
+	km := wallapop.RadiusKm(query)
+	if km != "" && search.Place != "" {
+		fmt.Fprintf(&t, "📍 %s, hasta %s km\n", telegram.Escape(search.Place), telegram.Escape(km))
+	} else if km != "" {
 		fmt.Fprintf(&t, "📍 hasta %s km\n", telegram.Escape(km))
 	} else {
 		t.WriteString("📍 toda España\n")
 	}
 	if price := priceRange(query.Get("min_sale_price"), query.Get("max_sale_price")); price != "" {
-		fmt.Fprintf(&t, "💶 %s\n", price)
+		fmt.Fprintf(&t, "💶 %s\n", telegram.Escape(price))
 	}
 	fmt.Fprintf(&t, "\n<i>Te aviso de lo nuevo a partir de ahora (%d/%d)</i>", len(user.Searches), b.cfg.MaxSearches)
+	if km == "" {
+		t.WriteString("\n<i>¿Solo cerca de ti? Mándame tu ubicación 📎</i>")
+	}
 	return commands.Reply{Text: t.String(), Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
 		{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(query)},
-	}}}}, nil
+	}}}}
 }
 
 func priceRange(min, max string) string {

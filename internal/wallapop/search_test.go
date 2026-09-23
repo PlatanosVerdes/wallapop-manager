@@ -81,3 +81,49 @@ func TestItemURLAndPhoto(t *testing.T) {
 		t.Errorf("photo = %q, expected the medium one when there is no big", got)
 	}
 }
+
+func TestFromText(t *testing.T) {
+	cases := []struct {
+		text, keywords, min, max, km string
+	}{
+		{"iphone 13", "iphone 13", "", "", ""},
+		{"iphone 13 hasta 400", "iphone 13", "", "400", ""},
+		{"bici 100-300€", "bici", "100", "300", ""},
+		{"sofá entre 50 y 200 euros", "sofá", "50", "200", ""},
+		{"Kallax máx 40", "Kallax", "", "40", ""},
+		{"moto desde 1.500 a 30 km", "moto", "1500", "", "30"},
+		{"ps5 menos de 300 20km", "ps5", "", "300", "20"},
+	}
+	for _, c := range cases {
+		query, err := FromText(c.text)
+		if err != nil {
+			t.Errorf("FromText(%q): %v", c.text, err)
+			continue
+		}
+		got := []string{query.Get("keywords"), query.Get("min_sale_price"), query.Get("max_sale_price"), query.Get("distance_in_km")}
+		want := []string{c.keywords, c.min, c.max, c.km}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("FromText(%q) = %q, expected %q", c.text, got, want)
+				break
+			}
+		}
+		if query.Get("source") == "" {
+			t.Errorf("FromText(%q) is not searchable", c.text)
+		}
+	}
+	if _, err := FromText("hasta 400"); !errors.Is(err, ErrNoFilter) {
+		t.Errorf("a price alone was taken as a search: %v", err)
+	}
+}
+
+func TestNearKeepsTheRadiusAsked(t *testing.T) {
+	query, _ := FromText("moto a 10 km")
+	if got := Near(query, 41.38, 2.17, 30); got.Get("distance_in_km") != "10" || RadiusKm(got) != "10" {
+		t.Errorf("radius = %q", got.Get("distance_in_km"))
+	}
+	query, _ = FromText("moto")
+	if got := Near(query, 41.38, 2.17, 30); RadiusKm(got) != "30" || got.Get("latitude") != "41.38000" {
+		t.Errorf("near = %v", got)
+	}
+}

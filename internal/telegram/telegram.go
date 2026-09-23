@@ -152,10 +152,16 @@ func (c Chat) Name() string {
 }
 
 type Message struct {
-	MessageID int64  `json:"message_id"`
-	Date      int64  `json:"date"`
-	Text      string `json:"text"`
-	Chat      Chat   `json:"chat"`
+	MessageID int64     `json:"message_id"`
+	Date      int64     `json:"date"`
+	Text      string    `json:"text"`
+	Chat      Chat      `json:"chat"`
+	Location  *Location `json:"location"`
+}
+
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
 }
 
 type Update struct {
