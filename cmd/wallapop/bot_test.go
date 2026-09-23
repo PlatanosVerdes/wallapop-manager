@@ -24,7 +24,7 @@ func newBot(t *testing.T) *botState {
 	t.Helper()
 	cfg := config.Config{DataDir: t.TempDir(), TelegramChat: ownerChat, MaxSearches: 3, MaxUsers: 3}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	people, err := loadUsers(cfg, log)
+	people, err := loadUsers(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
