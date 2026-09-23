@@ -158,3 +158,61 @@ func TestTheNameGoesAroundTheAddress(t *testing.T) {
 		t.Errorf("order_by = %q", got)
 	}
 }
+
+// The pencil makes the next message the new name, and only the next one.
+func TestThePencilRenames(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	me := commands.Request{Chat: telegram.Chat{ID: 100}}
+	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+
+	if _, _, err := b.onButton(ctx, ownerChat, buttonRename+search.ID); err != nil {
+		t.Fatal(err)
+	}
+	me.Args = "  las   motos  "
+	if _, err := b.onText(ctx, me); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := b.people.Search(ownerChat, search.ID); got.Name != "las motos" {
+		t.Fatalf("the search is called %q", got.Name)
+	}
+
+	// The question has been answered: the next message is not a name any more.
+	me.Args = "otra cosa"
+	_, _ = b.onText(ctx, me)
+	if got, _ := b.people.Search(ownerChat, search.ID); got.Name != "las motos" {
+		t.Fatalf("a second message renamed it again to %q", got.Name)
+	}
+}
+
+// An address sent while a name is expected is still a new search.
+func TestAnAddressIsNotAName(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+	_, _, _ = b.onButton(ctx, ownerChat, buttonRename+search.ID)
+
+	_, err := b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 100},
+		Args: "https://es.wallapop.com/search?keywords=kallax"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, _ := b.people.Get(ownerChat)
+	if len(user.Searches) != 2 || user.Searches[0].Name != "Motos" {
+		t.Fatalf("searches are %+v", user.Searches)
+	}
+}
+
+// Nobody renames another chat's search with a forged pencil.
+func TestAForgedPencilRenamesNothing(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
+	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
+
+	_, _, _ = b.onButton(ctx, friendChat, buttonRename+search.ID)
+	_, _ = b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 200}, Args: "mia"})
+	if got, _ := b.people.Search(ownerChat, search.ID); got.Name != "Motos" {
+		t.Fatalf("another chat renamed the search to %q", got.Name)
+	}
+}

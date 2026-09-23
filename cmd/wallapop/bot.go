@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PlatanosVerdes/wallapop-manager/internal/commands"
@@ -22,6 +23,7 @@ const (
 	buttonToggle    = "t:"
 	buttonMute      = "m:"
 	buttonAskDelete = "d:"
+	buttonRename    = "e:"
 	buttonDelete    = "D:"
 	buttonKeep      = "k:"
 	buttonLeave     = "B:"
@@ -34,6 +36,32 @@ type botState struct {
 	cfg    config.Config
 	people *users.Store
 	log    *slog.Logger
+	bot    *telegram.Bot
+
+	// renaming is the search each chat was asked a new name for. It lives in memory: a
+	// question lost to a restart is asked again by pressing the pencil.
+	mu       sync.Mutex
+	renaming map[string]renaming
+}
+
+type renaming struct {
+	search string
+	asked  time.Time
+}
+
+// renameWindow is how long the next message is taken as the new name.
+const renameWindow = 5 * time.Minute
+
+// nameLimit keeps a name short enough to fit on a button next to two others.
+const nameLimit = 40
+
+// pendingRename answers the search a chat is naming, and forgets the question either way.
+func (b *botState) pendingRename(chat string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, ok := b.renaming[chat]
+	delete(b.renaming, chat)
+	return r.search, ok && time.Since(r.asked) < renameWindow
 }
 
 func (b *botState) commands(listener *commands.Listener) []commands.Command {
@@ -53,7 +81,7 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		},
 		{
 			Name: "busquedas",
-			Help: "tus busquedas, para silenciarlas o eliminarlas",
+			Help: "tus busquedas, para silenciarlas, renombrarlas o eliminarlas",
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
 				user, _ := b.people.Get(req.ChatID())
 				return commands.Reply{Text: searchesText(user, b.cfg.MaxSearches), Keys: searchKeys(user)}, nil
@@ -126,13 +154,32 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 // phone: copy the page, paste it here. Whatever is written around the address, before or
 // after it, is the name.
 func (b *botState) onText(_ context.Context, req commands.Request) (commands.Reply, error) {
+	id, renamingOne := b.pendingRename(req.ChatID())
 	for _, word := range strings.Fields(req.Args) {
 		if strings.Contains(word, "wallapop.com") {
 			name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
 			return b.add(req.ChatID(), word, name)
 		}
 	}
+	if renamingOne {
+		return b.rename(req.ChatID(), id, req.Args)
+	}
 	return commands.Say(howToAdd), nil
+}
+
+func (b *botState) rename(chat, id, name string) (commands.Reply, error) {
+	name = strings.Join(strings.Fields(name), " ")
+	if runes := []rune(name); len(runes) > nameLimit {
+		name = string(runes[:nameLimit])
+	}
+	if name == "" {
+		return commands.Say("Sin nombre no puedo. Pulsa el lapiz otra vez en /busquedas."), nil
+	}
+	search, err := b.people.RenameSearch(chat, id, name)
+	if err != nil {
+		return commands.Reply{}, err
+	}
+	return commands.Say("✏️ Ahora se llama <b>" + telegram.Escape(search.Name) + "</b>"), nil
 }
 
 func (b *botState) add(chat, address, name string) (commands.Reply, error) {
@@ -205,6 +252,25 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		done := &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("🔕 " + search.Name + " silenciada")}}}
 		return "Silenciada " + search.Name + ". Se enciende otra vez desde /busquedas", done, nil
 
+	case buttonRename:
+		search, err := b.people.Search(chat, arg)
+		if err != nil {
+			return err.Error(), nil, nil
+		}
+		b.mu.Lock()
+		if b.renaming == nil {
+			b.renaming = map[string]renaming{}
+		}
+		b.renaming[chat] = renaming{search: search.ID, asked: time.Now()}
+		b.mu.Unlock()
+		ask := "✏️ ¿Como quieres llamar a <b>" + telegram.Escape(search.Name) + "</b>? Escribemelo."
+		if b.bot != nil {
+			if err := b.bot.To(chat).Text(ctx, ask, nil); err != nil {
+				return "", nil, err
+			}
+		}
+		return "Escribeme el nombre nuevo", nil, nil
+
 	case buttonAskDelete:
 		search, err := b.people.Search(chat, arg)
 		if err != nil {
@@ -274,6 +340,7 @@ func searchKeys(user users.User) *telegram.Keyboard {
 		}
 		keys.Rows = append(keys.Rows, []telegram.Button{
 			{Text: text, Data: buttonToggle + search.ID, Style: style},
+			{Text: "✏️", Data: buttonRename + search.ID},
 			{Text: "🗑", Data: buttonAskDelete + search.ID},
 		})
 	}
@@ -298,7 +365,7 @@ func searchesText(user users.User, limit int) string {
 	if muted > 0 {
 		fmt.Fprintf(&t, "%d silenciadas\n", muted)
 	}
-	t.WriteString("<i>la campana silencia o devuelve, la papelera elimina</i>")
+	t.WriteString("<i>la campana silencia o devuelve, el lapiz cambia el nombre, la papelera elimina</i>")
 	return t.String()
 }
 

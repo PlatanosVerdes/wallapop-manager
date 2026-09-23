@@ -150,16 +150,20 @@ Each chat sees its own searches and its own listings, and nothing else: not the 
 chats, and nothing of the account the catalogue runs on.
 
 A search is added by pasting the address of a search made on es.wallapop.com, with any
-text around it taken as its name. The answer says the radius, which matters because a
+text around it, before or after, taken as its name. The answer says the radius, which matters because a
 search made without a location covers the whole country.
 
 | Command | What it does |
 | :--- | :--- |
-| `/busquedas` | Your searches, each with a bell that silences it or gives it back and a bin that deletes it after asking |
-| `/nueva <address>` | The same as pasting the address |
+| `/busquedas` | Your searches, each with a bell that silences it or gives it back, a pencil that renames it, and a bin that deletes it after asking |
+| `/nueva [name] <address>` | The same as pasting the address |
 | `/ahora` | Runs your searches now. Answers `ya hay una ronda en marcha` rather than queueing behind one |
 | `/baja` | Deletes your searches and what was seen for you, after asking |
 | `/ayuda` | The list, built from the same table the bot dispatches from |
+
+The pencil asks for the new name and takes the next message as it, for five minutes; an
+address sent instead is still a new search. The question lives in memory, so one lost to
+a restart is asked again by pressing the pencil.
 
 Silencing keeps the search and stops the messages. Deleting forgets it: the same address
 pasted again starts over, first round silent.
