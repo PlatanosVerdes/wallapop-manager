@@ -87,6 +87,49 @@ func TestAPastedAddressBecomesASearch(t *testing.T) {
 	}
 }
 
+// The phone app cannot share a search, so it can be written out instead.
+func TestAWrittenSearchIsStored(t *testing.T) {
+	b := newBot(t)
+	reply, err := b.onText(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: "bici 100-300"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "de 100 a 300") || !strings.Contains(reply.Text, "ubicación") {
+		t.Fatalf("the answer was %q", reply.Text)
+	}
+	user, _ := b.people.Get(ownerChat)
+	if len(user.Searches) != 1 || user.Searches[0].Name != "bici" {
+		t.Fatalf("stored %+v", user.Searches)
+	}
+}
+
+// A location narrows the latest search, and the search starts over so what was already
+// around there is not announced as new.
+func TestALocationNarrowsTheLatestSearch(t *testing.T) {
+	b := newBot(t)
+	ctx := context.Background()
+	owner := telegram.Chat{ID: 100}
+	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "kallax"})
+	_, _ = b.onText(ctx, commands.Request{Chat: owner, Args: "bici a 10 km"})
+	before, _ := b.people.Get(ownerChat)
+
+	reply, err := b.onText(ctx, commands.Request{Chat: owner, Location: &telegram.Location{Latitude: 41.38, Longitude: 2.17}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply.Text, "hasta 10 km") {
+		t.Fatalf("the answer was %q", reply.Text)
+	}
+	after, _ := b.people.Get(ownerChat)
+	if after.Searches[0] != before.Searches[0] {
+		t.Errorf("the older search changed: %+v", after.Searches[0])
+	}
+	bici := after.Searches[1]
+	if bici.ID == before.Searches[1].ID || wallapop.RadiusKm(bici.Values()) != "10" {
+		t.Errorf("the latest search was not narrowed afresh: %+v", bici)
+	}
+}
+
 // Every press is looked up inside the chat it came from.
 func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
 	b := newBot(t)

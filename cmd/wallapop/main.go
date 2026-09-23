@@ -346,9 +346,14 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 	return nil
 }
 
-// addSearch is the one way a search comes in, from the bot or from the terminal.
-func addSearch(cfg config.Config, people *users.Store, chat, address, name string) (users.Search, error) {
-	query, err := wallapop.FromWebURL(address)
+// addSearch is the one way a search comes in, from the bot or from the terminal: the address
+// of a search made on the web, or the search written out.
+func addSearch(cfg config.Config, people *users.Store, chat, input, name string) (users.Search, error) {
+	parse := wallapop.FromText
+	if strings.Contains(input, "wallapop.com") {
+		parse = wallapop.FromWebURL
+	}
+	query, err := parse(input)
 	if err != nil {
 		return users.Search{}, err
 	}

@@ -261,6 +261,34 @@ func (s *Store) RenameSearch(chat, id, name string) (Search, error) {
 	return Search{}, ErrNoSuchSearch
 }
 
+// SetQuery changes what a search looks for. It gets a new id, so its first round records
+// what is already there instead of announcing it as new.
+func (s *Store) SetQuery(chat, id string, query url.Values) (Search, error) {
+	if err := s.lock(); err != nil {
+		s.mu.Unlock()
+		return Search{}, err
+	}
+	defer s.mu.Unlock()
+	user, ok := s.users[chat]
+	if !ok {
+		return Search{}, ErrUnknown
+	}
+	encoded := query.Encode()
+	for _, search := range user.Searches {
+		if search.Query == encoded && search.ID != id {
+			return Search{}, fmt.Errorf("%w: %s", ErrAlreadyExists, search.Name)
+		}
+	}
+	for i := range user.Searches {
+		if user.Searches[i].ID == id {
+			user.Searches[i].ID = newID()
+			user.Searches[i].Query = encoded
+			return user.Searches[i], s.save()
+		}
+	}
+	return Search{}, ErrNoSuchSearch
+}
+
 // SetMuted switches a search off or back on, and answers it in its new position.
 func (s *Store) SetMuted(chat, id string, muted bool) (Search, error) {
 	if err := s.lock(); err != nil {
