@@ -137,3 +137,24 @@ func TestLeavingRemovesEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The name can go before the address or after it, pasted or behind /nueva.
+func TestTheNameGoesAroundTheAddress(t *testing.T) {
+	b := newBot(t)
+	coches := "https://es.wallapop.com/search?category_id=100&brand=Citroen&order_by=closest"
+	for _, cmd := range b.commands(&commands.Listener{}) {
+		if cmd.Name != "nueva" {
+			continue
+		}
+		if _, err := cmd.Run(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100}, Args: "coches top " + coches}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	user, _ := b.people.Get(ownerChat)
+	if len(user.Searches) != 1 || user.Searches[0].Name != "coches top" {
+		t.Fatalf("stored %+v", user.Searches)
+	}
+	if got := user.Searches[0].Values().Get("order_by"); got != "newest" {
+		t.Errorf("order_by = %q", got)
+	}
+}

@@ -46,12 +46,9 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 		},
 		{
 			Name: "nueva",
-			Help: "guarda una busqueda: /nueva y la direccion de una busqueda hecha en la web",
+			Help: "guarda una busqueda: un nombre si quieres y la direccion de una busqueda hecha en la web",
 			Run: func(_ context.Context, req commands.Request) (commands.Reply, error) {
-				if req.Args == "" {
-					return commands.Say(howToAdd), nil
-				}
-				return b.add(req.ChatID(), req.Args)
+				return b.onText(context.Background(), req)
 			},
 		},
 		{
@@ -101,7 +98,8 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 }
 
 const howToAdd = "<i>Para guardar una busqueda, hazla en es.wallapop.com con los filtros que quieras " +
-	"y pegame aqui la direccion de la pagina.</i>"
+	"y pegame aqui la direccion de la pagina. Si escribes algo al lado, por ejemplo " +
+	"\"coches top\" y la direccion, la busqueda se llama asi.</i>"
 
 // start is the only command a stranger can run, and all it takes to join.
 func (b *botState) start(_ context.Context, req commands.Request) (commands.Reply, error) {
@@ -125,20 +123,19 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 }
 
 // onText takes a pasted address as a new search, which is the whole of adding one from a
-// phone: copy the page, paste it here.
+// phone: copy the page, paste it here. Whatever is written around the address, before or
+// after it, is the name.
 func (b *botState) onText(_ context.Context, req commands.Request) (commands.Reply, error) {
 	for _, word := range strings.Fields(req.Args) {
 		if strings.Contains(word, "wallapop.com") {
 			name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
-			return b.add(req.ChatID(), word+" "+name)
+			return b.add(req.ChatID(), word, name)
 		}
 	}
 	return commands.Say(howToAdd), nil
 }
 
-// add takes an address and, optionally, a name after it.
-func (b *botState) add(chat, args string) (commands.Reply, error) {
-	address, name, _ := strings.Cut(strings.TrimSpace(args), " ")
+func (b *botState) add(chat, address, name string) (commands.Reply, error) {
 	search, err := addSearch(b.cfg, b.people, chat, address, name)
 	if err != nil {
 		return commands.Reply{}, err
