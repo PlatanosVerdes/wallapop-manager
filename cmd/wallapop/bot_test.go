@@ -4,16 +4,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/PlatanosVerdes/wallapop-manager/internal/commands"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/config"
-	"github.com/PlatanosVerdes/wallapop-manager/internal/session"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/telegram"
 	"github.com/PlatanosVerdes/wallapop-manager/internal/users"
 )
@@ -24,98 +20,52 @@ const (
 	motos      = "https://es.wallapop.com/search?brand=Yamaha&model=XSR+900&category_id=14000"
 )
 
-// sent records who was told what.
-type sent struct {
-	mu   sync.Mutex
-	msgs []string
-}
-
-func (s *sent) to(chat string) []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []string
-	for _, m := range s.msgs {
-		if to, text, _ := strings.Cut(m, "|"); to == chat {
-			out = append(out, text)
-		}
-	}
-	return out
-}
-
-func newBot(t *testing.T) (*botState, *sent) {
+func newBot(t *testing.T) *botState {
 	t.Helper()
-	box := &sent{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		if strings.HasSuffix(r.URL.Path, "sendMessage") {
-			box.mu.Lock()
-			box.msgs = append(box.msgs, r.Form.Get("chat_id")+"|"+r.Form.Get("text"))
-			box.mu.Unlock()
-		}
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	dir := t.TempDir()
-	cfg := config.Config{DataDir: dir, TelegramChat: ownerChat, TelegramToken: "token", MaxSearches: 3}
+	cfg := config.Config{DataDir: t.TempDir(), TelegramChat: ownerChat, MaxSearches: 3, MaxUsers: 3}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	people, err := loadUsers(cfg, log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bot := telegram.New("token", ownerChat)
-	bot.APIURL = srv.URL + "/bot"
-	return &botState{
-		cfg: cfg, store: session.NewStore(dir), people: people, log: log, bot: bot,
-		nextWatch: time.Now, nextRun: time.Now,
-	}, box
+	return &botState{cfg: cfg, people: people, log: log}
 }
 
 func friend() commands.Request {
 	return commands.Request{Chat: telegram.Chat{ID: 200, FirstName: "Ana"}}
 }
 
-func TestAFriendGetsInOnlyWhenTheOwnerSaysSo(t *testing.T) {
-	b, box := newBot(t)
+// The bot is public: /start is all it takes, up to the cap.
+func TestStartLetsAnybodyIn(t *testing.T) {
+	b := newBot(t)
 	ctx := context.Background()
 
 	if _, err := b.start(ctx, friend()); err != nil {
 		t.Fatal(err)
 	}
-	if b.people.IsActive(friendChat) {
-		t.Fatal("a stranger was let in by asking")
-	}
-	if asked := box.to(ownerChat); len(asked) != 1 || !strings.Contains(asked[0], "Ana") {
-		t.Fatalf("the owner was told %v", asked)
-	}
-
-	// A second /start does not bother the owner again.
-	_, _ = b.start(ctx, friend())
-	if asked := box.to(ownerChat); len(asked) != 1 {
-		t.Fatalf("the owner was asked %d times", len(asked))
-	}
-
-	// Only the owner's press counts, even if somebody forges the button.
-	if _, _, err := b.onButton(ctx, friendChat, buttonApprove+friendChat); err != nil {
-		t.Fatal(err)
-	}
-	if b.people.IsActive(friendChat) {
-		t.Fatal("a chat approved itself")
-	}
-
-	if _, _, err := b.onButton(ctx, ownerChat, buttonApprove+friendChat); err != nil {
-		t.Fatal(err)
-	}
 	if !b.people.IsActive(friendChat) {
-		t.Fatal("the owner's yes did not let the friend in")
+		t.Fatal("/start did not let the friend in")
 	}
-	if told := box.to(friendChat); len(told) == 0 || !strings.Contains(told[len(told)-1], "dentro") {
-		t.Fatalf("the friend was told %v", told)
+
+	// The owner and Ana make two of three; the third joins and the fourth finds it full.
+	_, _ = b.start(ctx, commands.Request{Chat: telegram.Chat{ID: 300}})
+	reply, _ := b.start(ctx, commands.Request{Chat: telegram.Chat{ID: 400}})
+	if b.people.IsActive("400") || !strings.Contains(reply.Text, "lleno") {
+		t.Fatalf("the cap was not kept: %q", reply.Text)
+	}
+}
+
+// The owner is created before writing anything, so the name comes with the first /start.
+func TestStartKeepsTheNameUpToDate(t *testing.T) {
+	b := newBot(t)
+	_, _ = b.start(context.Background(), commands.Request{Chat: telegram.Chat{ID: 100, FirstName: "Jorge"}})
+	if user, _ := b.people.Get(ownerChat); user.Name != "Jorge" {
+		t.Fatalf("the owner is still called %q", user.Name)
 	}
 }
 
 func TestAPastedAddressBecomesASearch(t *testing.T) {
-	b, _ := newBot(t)
+	b := newBot(t)
 	ctx := context.Background()
 
 	reply, err := b.onText(ctx, commands.Request{Chat: telegram.Chat{ID: 100}, Args: "mira " + motos + " la moto"})
@@ -133,7 +83,7 @@ func TestAPastedAddressBecomesASearch(t *testing.T) {
 
 // Every press is looked up inside the chat it came from.
 func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
-	b, _ := newBot(t)
+	b := newBot(t)
 	ctx := context.Background()
 	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
 	search, err := addSearch(b.cfg, b.people, ownerChat, motos, "")
@@ -153,7 +103,7 @@ func TestNobodyTouchesAnotherChatsSearch(t *testing.T) {
 }
 
 func TestDeletingAsksFirst(t *testing.T) {
-	b, _ := newBot(t)
+	b := newBot(t)
 	ctx := context.Background()
 	search, _ := addSearch(b.cfg, b.people, ownerChat, motos, "Motos")
 
@@ -172,7 +122,7 @@ func TestDeletingAsksFirst(t *testing.T) {
 }
 
 func TestLeavingRemovesEverything(t *testing.T) {
-	b, _ := newBot(t)
+	b := newBot(t)
 	ctx := context.Background()
 	_, _ = b.people.Request(friendChat, "Ana", true, time.Now())
 	_, _ = addSearch(b.cfg, b.people, friendChat, motos, "")

@@ -7,25 +7,21 @@ import (
 	"time"
 )
 
-func TestAWaitingUserCannotAddSearches(t *testing.T) {
+func TestAChatThatHasNotJoinedCannotAddSearches(t *testing.T) {
 	store, err := Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if created, _ := store.Request("42", "Ana", false, now); !created {
-		t.Fatal("the first request was not recorded")
-	}
-	if created, _ := store.Request("42", "Ana", false, now); created {
-		t.Fatal("a second /start counted as a new request")
-	}
-
 	query := url.Values{"keywords": {"kallax"}}
 	if _, err := store.Add("42", "kallax", query, 3, now); !errors.Is(err, ErrUnknown) {
-		t.Fatalf("a user waiting for approval added a search: %v", err)
+		t.Fatalf("a chat that never sent /start added a search: %v", err)
 	}
-	if _, err := store.Approve("42"); err != nil {
-		t.Fatal(err)
+	if created, _ := store.Request("42", "Ana", true, now); !created {
+		t.Fatal("the first /start was not recorded")
+	}
+	if created, _ := store.Request("42", "Ana", true, now); created {
+		t.Fatal("a second /start counted as a new chat")
 	}
 	if _, err := store.Add("42", "kallax", query, 3, now); err != nil {
 		t.Fatal(err)

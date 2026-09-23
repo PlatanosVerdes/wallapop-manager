@@ -26,7 +26,7 @@ var (
 type User struct {
 	Chat string `json:"chat"`
 	Name string `json:"name"`
-	// Active is false while the request waits for the owner to approve it.
+	// Active is what lets a chat past /start.
 	Active   bool      `json:"active"`
 	Since    time.Time `json:"since"`
 	Searches []Search  `json:"searches,omitempty"`
@@ -138,8 +138,7 @@ func (s *Store) Active() []User {
 	return out
 }
 
-// Request records somebody asking to join. It reports false when the chat was already
-// known, so a second /start does not bother the owner again.
+// Request records a chat joining. It reports false when the chat was already known.
 func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, error) {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
@@ -153,18 +152,22 @@ func (s *Store) Request(chat, name string, active bool, now time.Time) (bool, er
 	return true, s.save()
 }
 
-func (s *Store) Approve(chat string) (User, error) {
+// Rename keeps the name a chat is shown by in step with Telegram's.
+func (s *Store) Rename(chat, name string) error {
 	if err := s.lock(); err != nil {
 		s.mu.Unlock()
-		return User{}, err
+		return err
 	}
 	defer s.mu.Unlock()
 	user, ok := s.users[chat]
 	if !ok {
-		return User{}, ErrUnknown
+		return ErrUnknown
 	}
-	user.Active = true
-	return clone(user), s.save()
+	if name == "" || user.Name == name {
+		return nil
+	}
+	user.Name = name
+	return s.save()
 }
 
 func (s *Store) Remove(chat string) error {
