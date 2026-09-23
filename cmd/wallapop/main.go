@@ -347,19 +347,9 @@ func cmdSearches(cfg config.Config, log *slog.Logger, args []string) error {
 	return nil
 }
 
-// addSearch is the one way a search comes in, from the bot or from the terminal: the address
-// of a search made on the web, or the search written out.
+// addSearch is the one way a search comes in, from the bot or from the terminal.
 func addSearch(ctx context.Context, cfg config.Config, people *users.Store, chat, input, name string) (users.Search, error) {
-	var (
-		query url.Values
-		place string
-		err   error
-	)
-	if strings.Contains(input, "wallapop.com") {
-		query, err = wallapop.FromWebURL(input)
-	} else {
-		query, place, err = fromText(ctx, places.New(cfg.PlacesURL), input)
-	}
+	query, place, err := parseSearch(ctx, cfg, input)
 	if err != nil {
 		return users.Search{}, err
 	}
@@ -367,6 +357,23 @@ func addSearch(ctx context.Context, cfg config.Config, people *users.Store, chat
 		name = searchName(query)
 	}
 	return people.Add(chat, name, place, query, cfg.MaxSearches, time.Now())
+}
+
+// parseSearch reads what a search can arrive as: the address of a search made on the web,
+// the address of a listing to look for more like it, or the search written out.
+func parseSearch(ctx context.Context, cfg config.Config, input string) (url.Values, string, error) {
+	if !strings.Contains(input, "wallapop.com") {
+		return fromText(ctx, places.New(cfg.PlacesURL), input)
+	}
+	if slug, ok := wallapop.ItemSlug(input); ok {
+		listing, err := newClient(cfg, session.NewStore(cfg.DataDir)).Listing(ctx, slug)
+		if err != nil {
+			return nil, "", err
+		}
+		return wallapop.LikeListing(listing), "", nil
+	}
+	query, err := wallapop.FromWebURL(input)
+	return query, "", err
 }
 
 // fromText reads a written search, and the town after its last "en" when there is one: "funda

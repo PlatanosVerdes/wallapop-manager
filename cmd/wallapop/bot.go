@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -29,6 +32,8 @@ const (
 	buttonKeep      = "k:"
 	buttonLeave     = "B:"
 	buttonStay      = "x:"
+	buttonWatch     = "w:"
+	buttonDiscard   = "c:"
 )
 
 // botState answers each chat about its own searches and nothing else: no other chat, and
@@ -43,7 +48,25 @@ type botState struct {
 	// question lost to a restart is asked again by pressing the pencil.
 	mu       sync.Mutex
 	renaming map[string]renaming
+	// offers is the search each chat was shown and not yet said yes to, and asking the
+	// chats that pressed /nueva alone and whose next message is the search.
+	offers map[string]offer
+	asking map[string]time.Time
 }
+
+type offer struct {
+	token string
+	query url.Values
+	place string
+	made  time.Time
+}
+
+// offerWindow is how long a shown search waits for its ✅, and askWindow how long /nueva
+// alone waits for the search.
+const (
+	offerWindow = 30 * time.Minute
+	askWindow   = 5 * time.Minute
+)
 
 type renaming struct {
 	search string
@@ -65,6 +88,45 @@ func (b *botState) pendingRename(chat string) (string, bool) {
 	return r.search, ok && time.Since(r.asked) < renameWindow
 }
 
+func (b *botState) keepOffer(chat string, o offer) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.offers == nil {
+		b.offers = map[string]offer{}
+	}
+	b.offers[chat] = o
+}
+
+// takeOffer answers the shown search a press is for. An older card than the last one shown
+// finds nothing, so it cannot save the newer search by mistake.
+func (b *botState) takeOffer(chat, token string) (offer, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	o, ok := b.offers[chat]
+	if !ok || o.token != token {
+		return offer{}, false
+	}
+	delete(b.offers, chat)
+	return o, time.Since(o.made) < offerWindow
+}
+
+func (b *botState) askFor(chat string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.asking == nil {
+		b.asking = map[string]time.Time{}
+	}
+	b.asking[chat] = time.Now()
+}
+
+func (b *botState) wasAsked(chat string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	asked, ok := b.asking[chat]
+	delete(b.asking, chat)
+	return ok && time.Since(asked) < askWindow
+}
+
 func (b *botState) commands(listener *commands.Listener) []commands.Command {
 	return []commands.Command{
 		{
@@ -77,6 +139,10 @@ func (b *botState) commands(listener *commands.Listener) []commands.Command {
 			Name: "nueva",
 			Help: "Guardar una búsqueda",
 			Run: func(ctx context.Context, req commands.Request) (commands.Reply, error) {
+				b.askFor(req.ChatID())
+				if strings.TrimSpace(req.Args) == "" {
+					return commands.Say("🔎 ¿Qué busco?\n\n<i>Por ejemplo: bici 100-300 en Sant Cugat</i>"), nil
+				}
 				return b.onText(ctx, req)
 			},
 		},
@@ -130,6 +196,7 @@ const (
 	intro    = "Te aviso cuando sale algo nuevo en tus búsquedas de Wallapop."
 	howToAdd = "<i>Escríbeme lo que buscas: <b>bici 100-300</b>, <b>kallax hasta 40</b>, " +
 		"<b>sofá en Sant Cugat a 10 km</b>. O mándame una ubicación 📎 para mover ahí la última.\n\n" +
+		"¿Has visto un anuncio en la app? Compártemelo y vigilo cosas como esa.\n\n" +
 		"Para más filtros, haz la búsqueda en es.wallapop.com desde el navegador y pégame el enlace; " +
 		"lo que escribas delante será su nombre.</i>"
 )
@@ -158,27 +225,68 @@ func (b *botState) start(_ context.Context, req commands.Request) (commands.Repl
 	return commands.Say("👋 ¡Hola! " + intro + "\n\n" + howToAdd), nil
 }
 
-// onText takes whatever is not a command as a new search: a pasted address, with whatever
-// is written around it as the name, or the search written out. A shared location narrows
-// the latest search to around it.
+// onText takes whatever is not a command. The address of a web search is saved as it is,
+// with whatever is written around it as the name. A listing's address and a search written
+// out are shown first as what was understood, for a ✅: a chat is also where people just
+// talk. A shared location narrows the latest search to around it.
 func (b *botState) onText(ctx context.Context, req commands.Request) (commands.Reply, error) {
+	chat := req.ChatID()
 	if req.Location != nil {
-		return b.near(req.ChatID(), *req.Location)
+		return b.near(chat, *req.Location)
 	}
-	id, renamingOne := b.pendingRename(req.ChatID())
+	asked := b.wasAsked(chat)
+	id, renamingOne := b.pendingRename(chat)
 	for _, word := range strings.Fields(req.Args) {
-		if strings.Contains(word, "wallapop.com") {
-			name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
-			return b.add(ctx, req.ChatID(), word, name)
+		if !strings.Contains(word, "wallapop.com") {
+			continue
 		}
+		if _, isListing := wallapop.ItemSlug(word); isListing && !asked {
+			return b.offer(ctx, chat, word)
+		}
+		name := strings.Join(strings.Fields(strings.Replace(req.Args, word, "", 1)), " ")
+		return b.add(ctx, chat, word, name)
 	}
-	if renamingOne {
-		return b.rename(req.ChatID(), id, req.Args)
-	}
-	if strings.TrimSpace(req.Args) == "" {
+	switch {
+	case asked:
+		return b.add(ctx, chat, req.Args, "")
+	case renamingOne:
+		return b.rename(chat, id, req.Args)
+	case strings.TrimSpace(req.Args) == "":
 		return commands.Say(howToAdd), nil
+	case smallTalk(req.Args):
+		return commands.Say(joke()), nil
 	}
-	return b.add(ctx, req.ChatID(), req.Args, "")
+	return b.offer(ctx, chat, req.Args)
+}
+
+// offer shows the search it understood, and saves it on the ✅.
+func (b *botState) offer(ctx context.Context, chat, input string) (commands.Reply, error) {
+	query, place, err := parseSearch(ctx, b.cfg, input)
+	if err != nil {
+		return commands.Reply{}, err
+	}
+	o := offer{token: newToken(), query: query, place: place, made: time.Now()}
+	b.keepOffer(chat, o)
+
+	var t strings.Builder
+	t.WriteString("🔎 ¿Vigilo esto?\n\n")
+	fmt.Fprintf(&t, "<b>%s</b>\n", telegram.Escape(searchName(query)))
+	describe(&t, place, query)
+	if _, isListing := wallapop.ItemSlug(input); isListing {
+		t.WriteString("\n<i>Son cosas como ese anuncio. Si prefieres otras palabras, escríbemelas.</i>")
+	}
+	return commands.Reply{Text: t.String(), Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
+		{Text: "✅ Vigilar", Data: buttonWatch + o.token, Style: "success"},
+		{Text: "✖️ No", Data: buttonDiscard + o.token},
+	}, {
+		{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(query)},
+	}}}}, nil
+}
+
+func newToken() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (b *botState) near(chat string, at telegram.Location) (commands.Reply, error) {
@@ -223,24 +331,30 @@ func (b *botState) saved(chat, title string, search users.Search) commands.Reply
 	query := search.Values()
 	var t strings.Builder
 	fmt.Fprintf(&t, "%s <b>%s</b>\n", title, telegram.Escape(search.Name))
-	km := wallapop.RadiusKm(query)
-	if km != "" && search.Place != "" {
-		fmt.Fprintf(&t, "📍 %s, hasta %s km\n", telegram.Escape(search.Place), telegram.Escape(km))
-	} else if km != "" {
-		fmt.Fprintf(&t, "📍 hasta %s km\n", telegram.Escape(km))
-	} else {
-		t.WriteString("📍 toda España\n")
-	}
-	if price := priceRange(query.Get("min_sale_price"), query.Get("max_sale_price")); price != "" {
-		fmt.Fprintf(&t, "💶 %s\n", telegram.Escape(price))
-	}
+	describe(&t, search.Place, query)
 	fmt.Fprintf(&t, "\n<i>Te aviso de lo nuevo a partir de ahora (%d/%d)</i>", len(user.Searches), b.cfg.MaxSearches)
-	if km == "" {
+	if wallapop.RadiusKm(query) == "" {
 		t.WriteString("\n<i>¿Solo cerca de ti? Mándame tu ubicación 📎</i>")
 	}
 	return commands.Reply{Text: t.String(), Keys: &telegram.Keyboard{Rows: [][]telegram.Button{{
 		{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(query)},
 	}}}}
+}
+
+// describe is where a search looks and for how much, one line each.
+func describe(t *strings.Builder, place string, query url.Values) {
+	km := wallapop.RadiusKm(query)
+	switch {
+	case km != "" && place != "":
+		fmt.Fprintf(t, "📍 %s, hasta %s km\n", telegram.Escape(place), telegram.Escape(km))
+	case km != "":
+		fmt.Fprintf(t, "📍 hasta %s km\n", telegram.Escape(km))
+	default:
+		t.WriteString("📍 toda España\n")
+	}
+	if price := priceRange(query.Get("min_sale_price"), query.Get("max_sale_price")); price != "" {
+		fmt.Fprintf(t, "💶 %s\n", telegram.Escape(price))
+	}
 }
 
 func priceRange(min, max string) string {
@@ -349,6 +463,25 @@ func (b *botState) onButton(ctx context.Context, chat, data string) (string, *te
 		}
 		b.log.Info("a chat left", "chat", chat)
 		return "Hecho", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("👋 Hecho, hasta pronto")}}}, nil
+
+	case buttonWatch:
+		o, ok := b.takeOffer(chat, arg)
+		if !ok {
+			return "Se me ha olvidado, escríbemela otra vez", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("⌛ Caducada")}}}, nil
+		}
+		search, err := b.people.Add(chat, searchName(o.query), o.place, o.query, b.cfg.MaxSearches, time.Now())
+		if err != nil {
+			return err.Error(), nil, nil
+		}
+		b.log.Info("search added", "chat", chat, "search", search.Name)
+		return "Vigilando " + search.Name, &telegram.Keyboard{Rows: [][]telegram.Button{
+			{telegram.Off("✅ Vigilando " + search.Name)},
+			{{Text: "🔗 Ver en Wallapop", URL: wallapop.WebURL(o.query)}},
+		}}, nil
+
+	case buttonDiscard:
+		b.takeOffer(chat, arg)
+		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Vale, nada")}}}, nil
 
 	case buttonStay:
 		return "", &telegram.Keyboard{Rows: [][]telegram.Button{{telegram.Off("Sigues dentro")}}}, nil
