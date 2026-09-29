@@ -98,7 +98,7 @@ func (b *Bot) call(ctx context.Context, method string, form url.Values) error {
 
 	resp, err := b.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram %s: %w", method, err)
+		return transportError(method, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -107,6 +107,15 @@ func (b *Bot) call(ctx context.Context, method string, form url.Values) error {
 		return fmt.Errorf("telegram %s answered %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
+}
+
+// transportError drops the *url.Error wrapper, whose message is the full URL and so the token.
+func transportError(method string, err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return fmt.Errorf("telegram %s: %w", method, err)
 }
 
 // Escape protects what HTML parse mode reads as markup; listing titles are full of it.
@@ -217,7 +226,7 @@ func (b *Bot) get(ctx context.Context, method string, form url.Values, out any) 
 
 	resp, err := b.Poll.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram %s: %w", method, err)
+		return transportError(method, err)
 	}
 	defer resp.Body.Close()
 

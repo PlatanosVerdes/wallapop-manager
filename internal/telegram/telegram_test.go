@@ -89,3 +89,22 @@ func TestErrorsDoNotCarryTheToken(t *testing.T) {
 		t.Fatalf("the error carries the token: %v", err)
 	}
 }
+
+func TestTransportErrorsDoNotCarryTheToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	bot := New("secret-token", "chat")
+	bot.APIURL = srv.URL + "/bot"
+	for name, err := range map[string]error{
+		"sendMessage": bot.Text(context.Background(), "hola", nil),
+		"getUpdates":  func() error { _, err := bot.Updates(context.Background(), 0); return err }(),
+	} {
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		if strings.Contains(err.Error(), "secret-token") {
+			t.Fatalf("%s: the error carries the token: %v", name, err)
+		}
+	}
+}
