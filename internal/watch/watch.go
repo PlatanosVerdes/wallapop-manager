@@ -309,10 +309,10 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	fmt.Fprintf(&b, "🆕 <b>%s</b>\n", escape(item.Title))
 	fmt.Fprintf(&b, "<b>%s</b>", Money(item.Price.Amount, item.Price.Currency))
 	if where := item.Where(); where != "" {
-		fmt.Fprintf(&b, " · %s", escape(where))
+		fmt.Fprintf(&b, " - %s", escape(where))
 	}
 	if item.Reserved != nil && item.Reserved.Flag {
-		b.WriteString(" · <i>reservado</i>")
+		b.WriteString(" - <i>reservado</i>")
 	}
 	if details := detailsLine(item); details != "" {
 		fmt.Fprintf(&b, "\n%s", escape(details))
@@ -359,7 +359,7 @@ func CheaperLine(search string, item wallapop.SearchItem, before float64, escape
 	now := item.Price.Amount
 	var b strings.Builder
 	fmt.Fprintf(&b, "📉 <b>%s</b>\n", escape(item.Title))
-	fmt.Fprintf(&b, "<b>%s</b> · antes %s", Money(now, item.Price.Currency), Money(before, item.Price.Currency))
+	fmt.Fprintf(&b, "<b>%s</b> - antes %s", Money(now, item.Price.Currency), Money(before, item.Price.Currency))
 	if before > 0 && now < before {
 		fmt.Fprintf(&b, " (−%.0f%%)", (before-now)/before*100)
 	}

@@ -216,7 +216,7 @@ func TestHelpIsBuiltFromTheTable(t *testing.T) {
 		{Name: "estado", Help: "estado"},
 		{Name: "ahora", Help: "mira ahora"},
 	})
-	for _, want := range []string{"/estado · estado", "/ahora · mira ahora"} {
+	for _, want := range []string{"/estado - estado", "/ahora - mira ahora"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help does not carry %q:\n%s", want, got)
 		}

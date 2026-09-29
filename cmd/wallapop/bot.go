@@ -386,12 +386,12 @@ func (b *botState) check(ctx context.Context, chat, id string) (string, error) {
 	if res.Error != "" {
 		return "", fmt.Errorf("no he podido buscar: %s", res.Error)
 	}
-	text := fmt.Sprintf("🔎 %s: %d mirados · %d nuevos", name, res.Scanned, len(res.New))
+	text := fmt.Sprintf("🔎 %s: %d mirados - %d nuevos", name, res.Scanned, len(res.New))
 	if len(res.Cheaper) > 0 {
-		text += fmt.Sprintf(" · %d más baratos", len(res.Cheaper))
+		text += fmt.Sprintf(" - %d más baratos", len(res.Cheaper))
 	}
 	if len(res.Failures) > 0 {
-		text += " · ⚠️ " + res.Failures[0].Error
+		text += " - ⚠️ " + res.Failures[0].Error
 	}
 	return text, nil
 }
@@ -448,8 +448,8 @@ func searchesText(user users.User) string {
 	var t strings.Builder
 	t.WriteString("🔎 <b>Tus búsquedas</b>")
 	if muted > 0 {
-		fmt.Fprintf(&t, " · %d silenciadas", muted)
+		fmt.Fprintf(&t, " - %d silenciadas", muted)
 	}
-	t.WriteString("\n<i>🔔 silenciar · ✏️ renombrar · 🗑 eliminar</i>")
+	t.WriteString("\n<i>🔔 silenciar - ✏️ renombrar - 🗑 eliminar</i>")
 	return t.String()
 }
