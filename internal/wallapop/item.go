@@ -107,6 +107,40 @@ func (c *Client) itemID(ctx context.Context, slug string) (string, error) {
 	return string(m[1]), nil
 }
 
+// Details is what a listing says beyond its title and price: year and km for a motorbike,
+// colour and material for a sofa, in the words Wallapop shows.
+type Details struct {
+	Condition string
+	Features  []string
+	Shipping  bool
+}
+
+func (c *Client) Details(ctx context.Context, id string) (Details, error) {
+	var answer struct {
+		CharacteristicsDetails []struct {
+			Value string `json:"value"`
+		} `json:"characteristics_details"`
+		TypeAttributes struct {
+			Condition struct {
+				Text string `json:"text"`
+			} `json:"condition"`
+		} `json:"type_attributes"`
+		Shipping struct {
+			UserAllowsShipping bool `json:"user_allows_shipping"`
+		} `json:"shipping"`
+	}
+	if err := c.public(ctx, PathItem+id, nil, &answer); err != nil {
+		return Details{}, err
+	}
+	details := Details{Condition: answer.TypeAttributes.Condition.Text, Shipping: answer.Shipping.UserAllowsShipping}
+	for _, feature := range answer.CharacteristicsDetails {
+		if v := strings.TrimSpace(feature.Value); v != "" {
+			details.Features = append(details.Features, v)
+		}
+	}
+	return details, nil
+}
+
 var ErrNoListing = fmt.Errorf("ese anuncio ya no está en Wallapop")
 
 // LikeListing keeps the start of the title: every word must match, so the whole title

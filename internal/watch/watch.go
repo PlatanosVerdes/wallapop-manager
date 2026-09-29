@@ -3,13 +3,16 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -211,6 +214,13 @@ func Run(ctx context.Context, client Searcher, seen *Seen, searches []Search, no
 				if notify == nil {
 					continue
 				}
+				if detailer, ok := client.(Detailer); ok {
+					if d, err := detailer.Details(ctx, item.ID); err == nil {
+						item.Details = &d
+					} else if !errors.Is(err, errNoDetails) {
+						log.Warn("listing sent without its details", "title", item.Title, "err", err)
+					}
+				}
 				if err := notify.Listing(ctx, search, item); err != nil {
 					log.Error("could not send the message", "title", item.Title, "err", err)
 					res.Failures = append(res.Failures, Failure{Search: search.Name, Error: err.Error()})
@@ -304,10 +314,42 @@ func Line(search string, item wallapop.SearchItem, escape func(string) string) s
 	if item.Reserved != nil && item.Reserved.Flag {
 		b.WriteString(" · <i>reservado</i>")
 	}
+	if details := detailsLine(item); details != "" {
+		fmt.Fprintf(&b, "\n%s", escape(details))
+	}
 	if search != "" {
 		fmt.Fprintf(&b, "\n<i>🔎 %s</i>", escape(search))
 	}
 	return b.String()
+}
+
+var kilometres = regexp.MustCompile(`^(\d+) km$`)
+
+// detailsLine skips what the title already says, such as the brand or the model.
+func detailsLine(item wallapop.SearchItem) string {
+	d := item.Details
+	if d == nil {
+		return ""
+	}
+	title := strings.ToLower(item.Title)
+	var parts []string
+	if d.Condition != "" {
+		parts = append(parts, "✨ "+d.Condition)
+	}
+	for _, feature := range d.Features {
+		if strings.Contains(title, strings.ToLower(feature)) || strings.EqualFold(feature, d.Condition) {
+			continue
+		}
+		if m := kilometres.FindStringSubmatch(feature); m != nil {
+			km, _ := strconv.ParseFloat(m[1], 64)
+			feature = thousands(km) + " km"
+		}
+		parts = append(parts, feature)
+	}
+	if d.Shipping {
+		parts = append(parts, "📦 Envío")
+	}
+	return strings.Join(parts, " - ")
 }
 
 func CheaperLine(search string, item wallapop.SearchItem, before float64, escape func(string) string) string {
@@ -335,7 +377,10 @@ func Money(amount float64, currency string) string {
 	if currency != "" && currency != "EUR" {
 		symbol = currency
 	}
+	return thousands(amount) + " " + symbol
+}
 
+func thousands(amount float64) string {
 	whole := fmt.Sprintf("%.0f", amount)
 	var parts []string
 	for len(whole) > 3 {
@@ -343,5 +388,5 @@ func Money(amount float64, currency string) string {
 		whole = whole[:len(whole)-3]
 	}
 	parts = append([]string{whole}, parts...)
-	return strings.Join(parts, ".") + " " + symbol
+	return strings.Join(parts, ".")
 }
