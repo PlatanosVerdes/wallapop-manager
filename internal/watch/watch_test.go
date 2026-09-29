@@ -209,6 +209,44 @@ func TestLine(t *testing.T) {
 	}
 }
 
+func TestLineCarriesTheDetailsTheTitleLacks(t *testing.T) {
+	item := newItem("a", "Yamaha XSR 900", 6999, time.Minute, "")
+	item.Details = &wallapop.Details{Features: []string{"2022", "36639 km", "XSR 900", "Naked"}}
+	if got := Line("", item, nil); !strings.Contains(got, "\n2022 - 36.639 km - Naked") {
+		t.Errorf("the message was:\n%s", got)
+	}
+
+	item = newItem("b", "Estantería IKEA Kallax", 40, time.Minute, "")
+	item.Details = &wallapop.Details{Condition: "Buen estado", Features: []string{"Negro", "Madera"}, Shipping: true}
+	if got := Line("", item, nil); !strings.Contains(got, "\n✨ Buen estado - Negro - Madera - 📦 Envío") {
+		t.Errorf("the message was:\n%s", got)
+	}
+}
+
+type fakeDetailer struct{ asked int }
+
+func (f *fakeDetailer) Search(context.Context, url.Values, int) ([]wallapop.SearchItem, error) {
+	return nil, nil
+}
+
+func (f *fakeDetailer) Details(context.Context, string) (wallapop.Details, error) {
+	f.asked++
+	return wallapop.Details{Features: []string{"Naked"}}, nil
+}
+
+func TestCatalogueAsksEachListingOnce(t *testing.T) {
+	fake := &fakeDetailer{}
+	catalogue := NewCatalogue(fake, 0, 0)
+	for range 2 {
+		if d, err := catalogue.Details(context.Background(), "a"); err != nil || len(d.Features) != 1 {
+			t.Fatalf("Details = %+v, %v", d, err)
+		}
+	}
+	if fake.asked != 1 {
+		t.Errorf("asked %d times", fake.asked)
+	}
+}
+
 func TestPriceDropIsAnnouncedOnce(t *testing.T) {
 	searches := []Search{newSearch("s1", "motos")}
 	fake := &fakeWallapop{}

@@ -37,6 +37,8 @@ type SearchItem struct {
 	Images      []Image  `json:"images"`
 	Location    Location `json:"location"`
 	Reserved    *Flag    `json:"reserved"`
+	// Details are not in the search answer; the watcher fills them before announcing.
+	Details *Details `json:"-"`
 }
 
 func (i SearchItem) Created() time.Time {

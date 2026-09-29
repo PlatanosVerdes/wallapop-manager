@@ -210,7 +210,7 @@ func parse(text string) (name, args string) {
 func Help(commands []Command) string {
 	var b strings.Builder
 	for _, cmd := range commands {
-		fmt.Fprintf(&b, "/%s · %s\n", cmd.Name, telegram.Escape(cmd.Help))
+		fmt.Fprintf(&b, "/%s - %s\n", cmd.Name, telegram.Escape(cmd.Help))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
